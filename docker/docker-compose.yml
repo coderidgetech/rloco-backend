@@ -1,0 +1,75 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: rloco-mongodb
+    ports:
+      - "28017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    networks:
+      - rloco-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: rloco-storage
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    networks:
+      - rloco-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: rloco-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENV=development
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/rloco?authSource=admin
+      - JWT_SECRET=your-secret-key-change-in-production
+      - JWT_EXPIRY=24h
+      - STORAGE_TYPE=local
+      - STORAGE_ENDPOINT=minio:9000
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin
+      - STORAGE_BUCKET=rloco-uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - rloco-network
+    volumes:
+      - ../uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  minio_data:
+
+networks:
+  rloco-network:
+    driver: bridge

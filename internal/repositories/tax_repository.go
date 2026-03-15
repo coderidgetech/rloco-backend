@@ -1,0 +1,110 @@
+package repositories
+
+import (
+	"context"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"rloco-backend/internal/models"
+)
+
+type TaxRepository interface {
+	Create(ctx context.Context, rate *models.TaxRate) error
+	GetByID(ctx context.Context, id primitive.ObjectID) (*models.TaxRate, error)
+	GetByLocation(ctx context.Context, country, state, city, postalCode string) (*models.TaxRate, error)
+	List(ctx context.Context, activeOnly bool) ([]*models.TaxRate, error)
+	Update(ctx context.Context, id primitive.ObjectID, rate *models.TaxRate) error
+	Delete(ctx context.Context, id primitive.ObjectID) error
+}
+
+type taxRepository struct {
+	collection *mongo.Collection
+}
+
+func NewTaxRepository(db *MongoDB) TaxRepository {
+	return &taxRepository{
+		collection: db.GetCollection("tax_rates"),
+	}
+}
+
+func (r *taxRepository) Create(ctx context.Context, rate *models.TaxRate) error {
+	rate.ID = primitive.NewObjectID()
+	rate.CreatedAt = time.Now()
+
+	_, err := r.collection.InsertOne(ctx, rate)
+	return err
+}
+
+func (r *taxRepository) GetByID(ctx context.Context, id primitive.ObjectID) (*models.TaxRate, error) {
+	var rate models.TaxRate
+	err := r.collection.FindOne(ctx, bson.M{"_id": id}).Decode(&rate)
+	if err != nil {
+		return nil, err
+	}
+	return &rate, nil
+}
+
+func (r *taxRepository) GetByLocation(ctx context.Context, country, state, city, postalCode string) (*models.TaxRate, error) {
+	// Try to find most specific match first
+	filters := []bson.M{
+		// Most specific: country + state + city + postal code
+		{"country": country, "state": state, "city": city, "postal_code": postalCode, "is_active": true},
+		// Country + state + city
+		{"country": country, "state": state, "city": city, "is_active": true},
+		// Country + state
+		{"country": country, "state": state, "is_active": true},
+		// Country only
+		{"country": country, "is_active": true},
+	}
+
+	for _, filter := range filters {
+		var rate models.TaxRate
+		err := r.collection.FindOne(ctx, filter, options.FindOne().SetSort(bson.M{"created_at": -1})).Decode(&rate)
+		if err == nil {
+			return &rate, nil
+		}
+	}
+
+	// Return default 8% if no match found
+	return &models.TaxRate{
+		Rate:     8.0,
+		TaxType:  "sales_tax",
+		IsActive: true,
+	}, nil
+}
+
+func (r *taxRepository) List(ctx context.Context, activeOnly bool) ([]*models.TaxRate, error) {
+	filter := bson.M{}
+	if activeOnly {
+		filter["is_active"] = true
+	}
+
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.M{"country": 1, "state": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	rates := []*models.TaxRate{}
+	if err := cursor.All(ctx, &rates); err != nil {
+		return nil, err
+	}
+	return rates, nil
+}
+
+func (r *taxRepository) Update(ctx context.Context, id primitive.ObjectID, rate *models.TaxRate) error {
+	_, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": rate},
+	)
+	return err
+}
+
+func (r *taxRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
