@@ -143,7 +143,7 @@ func main() {
 	}
 	log.Println("Default categories upserted (Women, Men, Dresses, Accessories)")
 
-	// Seed inspiration videos for TikTok-style homepage section (only if empty)
+	// Seed inspiration videos for homepage style/lookbook section (only if empty)
 	videosCollection := db.Collection("videos")
 	count, _ := videosCollection.CountDocuments(ctx, bson.M{})
 	if count == 0 {
