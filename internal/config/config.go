@@ -56,8 +56,9 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	// Load .env file if it exists (for local development)
-	_ = godotenv.Load()
+	// Load .env from current directory (e.g. when run from backend/) and from backend/.env (when run from repo root)
+	_ = godotenv.Load(".env")
+	_ = godotenv.Load("backend/.env")
 
 	env := getEnv("ENV", "development")
 	jwtSecret := getEnv("JWT_SECRET", defaultJWTSecret)
