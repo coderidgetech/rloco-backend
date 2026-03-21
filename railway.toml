@@ -1,0 +1,4 @@
+# Force Dockerfile when Root Directory is backend
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
