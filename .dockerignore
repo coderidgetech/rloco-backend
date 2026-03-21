@@ -1,0 +1,9 @@
+# Never ship the pre-built binary into the image — we compile fresh in Docker
+bin/
+.git
+.gitignore
+*.md
+docs/
+.env
+.env.*
+!.env.example

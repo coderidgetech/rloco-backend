@@ -4,10 +4,13 @@ WORKDIR /app
 
 RUN apk add --no-cache git
 
-COPY go.mod go.sum ./
+# Copy go.mod first and download deps. Do not require go.sum in this step — some
+# deploy contexts omit go.sum (not committed / wrong root); go mod download still works.
+COPY go.mod ./
 RUN go mod download
 
-COPY . /app
+# Full source (includes go.sum when present for reproducible builds)
+COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o server ./cmd/server
 
