@@ -43,6 +43,8 @@ git clone <repository-url>
 cd rloco-backend
 ```
 
+**Monorepo-style workspace (optional):** If you keep this repo inside a parent folder next to `frontend/` and `mobile/`, the backend clone often lives at `your-workspace/backend/`. Run all `git` and `go` commands from **`backend/`** (where this `.git` lives). A fresh clone of `rloco-backend` alone has `go.mod` at the **clone root** — there is no `backend/` subfolder on GitHub.
+
 2. Install dependencies:
 ```bash
 go mod download
