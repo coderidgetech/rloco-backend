@@ -20,6 +20,9 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to load configuration:", err)
 	}
+	if err := cfg.ValidateTwilioVerify(); err != nil {
+		log.Fatal("Twilio Verify is required for phone OTP (set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID): ", err)
+	}
 
 	// Initialize database
 	db, err := repositories.NewMongoDB(cfg.MongoDBURI)
@@ -49,6 +52,7 @@ func main() {
 	addressRepo := repositories.NewAddressRepository(db)
 	passwordResetRepo := repositories.NewPasswordResetRepository(db)
 	emailVerificationRepo := repositories.NewEmailVerificationRepository(db)
+	phoneOTPRepo := repositories.NewPhoneOTPRepository(db)
 	newsletterRepo := repositories.NewNewsletterRepository(db)
 	trackingRepo := repositories.NewOrderTrackingRepository(db)
 
@@ -57,7 +61,19 @@ func main() {
 
 	// Initialize services
 	emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.SMTPFromName, cfg.AppBaseURL, cfg.AdminEmail)
-	authService := services.NewAuthService(userRepo, passwordResetRepo, emailVerificationRepo, emailService, cfg.JWTSecret, cfg.JWTExpiry, cfg.GoogleClientID)
+	twilioVerify := services.NewTwilioVerifyClient(cfg.TwilioAccountSid, cfg.TwilioAuthToken, cfg.TwilioVerifyServiceSid)
+	authService := services.NewAuthService(
+		userRepo,
+		passwordResetRepo,
+		emailVerificationRepo,
+		emailService,
+		phoneOTPRepo,
+		twilioVerify,
+		cfg.JWTSecret,
+		cfg.JWTExpiry,
+		cfg.GoogleClientID,
+		cfg.OTPDefaultCountryCode,
+	)
 	productService := services.NewProductService(productRepo)
 	categoryService := services.NewCategoryService(categoryRepo)
 	shippoClient := services.NewShippoClient(cfg)
@@ -140,6 +156,10 @@ func main() {
 		auth := api.Group("/auth")
 		{
 			auth.POST("/register", authHandler.Register)
+			auth.POST("/register-otp/send", authHandler.SendRegistrationOTP)
+			auth.POST("/register-otp/complete", authHandler.CompleteRegistrationOTP)
+			auth.POST("/login-otp/send", authHandler.SendLoginOTP)
+			auth.POST("/login-otp/complete", authHandler.CompleteLoginOTP)
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/google", authHandler.GoogleSignIn)
 			auth.POST("/logout", middleware.AuthRequired(), authHandler.Logout)

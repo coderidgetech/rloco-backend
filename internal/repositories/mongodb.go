@@ -110,6 +110,17 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	users.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "role", Value: 1}},
 	})
+	users.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "phone_key", Value: 1}},
+		Options: options.Index().SetUnique(true).SetSparse(true),
+	})
+
+	// Phone OTP challenges (registration, etc.)
+	phoneOTP := m.GetCollection("phone_otp_challenges")
+	phoneOTP.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "phone_key", Value: 1}, {Key: "purpose", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
 
 	// Carts indexes
 	carts := m.GetCollection("carts")

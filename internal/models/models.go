@@ -16,6 +16,7 @@ type User struct {
 	VendorID     *primitive.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
 	Avatar       string              `bson:"avatar" json:"avatar"`
 	Phone        *string             `bson:"phone,omitempty" json:"phone,omitempty"`
+	PhoneKey     string              `bson:"phone_key,omitempty" json:"-"` // digits-only lookup key; not exposed in JSON
 	Birthday     *time.Time          `bson:"birthday,omitempty" json:"birthday,omitempty"`
 	Active       bool                `bson:"active" json:"active"` // User account status
 	EmailVerified bool               `bson:"email_verified" json:"email_verified"`

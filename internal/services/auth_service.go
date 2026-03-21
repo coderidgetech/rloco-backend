@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/crypto/bcrypt"
 	"rloco-backend/internal/models"
 	"rloco-backend/internal/repositories"
 )
@@ -27,10 +29,16 @@ type AuthService interface {
 	ResetPassword(ctx context.Context, token, newPassword string) error
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerification(ctx context.Context, email string) error
-	UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time) error
+	UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time, name *string, email *string) error
 	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error
 	DeactivateAccount(ctx context.Context, userID string) error
 	DeleteAccount(ctx context.Context, userID string) error
+	// SendRegistrationOTP sends an OTP via Twilio Verify (SMS).
+	SendRegistrationOTP(ctx context.Context, phoneRaw string) error
+	// RegisterWithPhoneOTP verifies the OTP and creates the user (phone must match the sent OTP).
+	RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, password, name string) (*models.User, string, error)
+	SendLoginOTP(ctx context.Context, phoneRaw string) error
+	LoginWithPhoneOTP(ctx context.Context, phoneRaw, otpCode string) (*models.User, string, error)
 }
 
 type authService struct {
@@ -38,9 +46,12 @@ type authService struct {
 	passwordResetRepo     repositories.PasswordResetRepository
 	emailVerificationRepo repositories.EmailVerificationRepository
 	emailService          EmailService
-	secret                string
-	expiry                time.Duration
-	googleClientID        string
+	otpRepo            repositories.PhoneOTPRepository
+	twilioVerify       *TwilioVerifyClient
+	secret             string
+	expiry             time.Duration
+	googleClientID     string
+	defaultCountryCode string
 }
 
 type Claims struct {
@@ -50,10 +61,24 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func NewAuthService(userRepo repositories.UserRepository, passwordResetRepo repositories.PasswordResetRepository, emailVerificationRepo repositories.EmailVerificationRepository, emailService EmailService, secret string, expiryStr string, googleClientID string) AuthService {
+func NewAuthService(
+	userRepo repositories.UserRepository,
+	passwordResetRepo repositories.PasswordResetRepository,
+	emailVerificationRepo repositories.EmailVerificationRepository,
+	emailService EmailService,
+	otpRepo repositories.PhoneOTPRepository,
+	twilioVerify *TwilioVerifyClient,
+	secret string,
+	expiryStr string,
+	googleClientID string,
+	defaultCountryCode string,
+) AuthService {
 	expiry, _ := time.ParseDuration(expiryStr)
 	if expiry == 0 {
 		expiry = 24 * time.Hour
+	}
+	if defaultCountryCode == "" {
+		defaultCountryCode = "91"
 	}
 
 	return &authService{
@@ -61,9 +86,12 @@ func NewAuthService(userRepo repositories.UserRepository, passwordResetRepo repo
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		emailService:          emailService,
-		secret:                secret,
-		expiry:                expiry,
-		googleClientID:        googleClientID,
+		otpRepo:            otpRepo,
+		twilioVerify:       twilioVerify,
+		secret:             secret,
+		expiry:             expiry,
+		googleClientID:     googleClientID,
+		defaultCountryCode: defaultCountryCode,
 	}
 }
 
@@ -344,7 +372,7 @@ func (s *authService) ResendVerification(ctx context.Context, email string) erro
 	return s.emailService.SendEmailVerification(user.Email, token)
 }
 
-func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time) error {
+func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time, name *string, email *string) error {
 	id, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return errors.New("invalid user ID")
@@ -355,8 +383,46 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *s
 		return errors.New("user not found")
 	}
 
+	if name != nil {
+		n := strings.TrimSpace(*name)
+		if n == "" {
+			return errors.New("name cannot be empty")
+		}
+		user.Name = n
+	}
+
+	if email != nil {
+		newEmail := strings.TrimSpace(*email)
+		if newEmail == "" {
+			return errors.New("email cannot be empty")
+		}
+		if !strings.EqualFold(newEmail, user.Email) {
+			other, errLookup := s.userRepo.GetByEmail(ctx, newEmail)
+			if errLookup != nil && errLookup != mongo.ErrNoDocuments {
+				return errLookup
+			}
+			if other != nil && other.ID != user.ID {
+				return errors.New("email already in use")
+			}
+			user.Email = newEmail
+			user.EmailVerified = false
+		}
+	}
+
 	if phone != nil {
-		user.Phone = phone
+		raw := strings.TrimSpace(*phone)
+		if raw == "" {
+			user.Phone = nil
+			user.PhoneKey = ""
+		} else {
+			pk, err := NormalizePhoneKey(raw, s.defaultCountryCode)
+			if err != nil {
+				return errors.New("invalid phone number")
+			}
+			canonical := PhoneKeyToE164Plus(pk)
+			user.Phone = &canonical
+			user.PhoneKey = pk
+		}
 	}
 	if birthday != nil {
 		user.Birthday = birthday
@@ -407,4 +473,213 @@ func (s *authService) DeleteAccount(ctx context.Context, userID string) error {
 		return errors.New("invalid user ID")
 	}
 	return s.userRepo.Delete(ctx, id)
+}
+
+const (
+	registrationOTPTTL       = 10 * time.Minute
+	registrationOTPMinResend = 45 * time.Second
+	maxRegistrationOTPVerify = 5
+)
+
+func (s *authService) SendRegistrationOTP(ctx context.Context, phoneRaw string) error {
+	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	if err != nil {
+		return err
+	}
+	u, errPhone := s.userRepo.GetByPhoneKey(ctx, phoneKey)
+	if errPhone != nil && errPhone != mongo.ErrNoDocuments {
+		return errPhone
+	}
+	if errPhone == nil && u != nil {
+		return errors.New("an account with this phone already exists")
+	}
+
+	existing, err := s.otpRepo.Get(ctx, phoneKey, repositories.PhoneOTPPurposeRegistration)
+	if err == nil && existing != nil {
+		if time.Since(existing.LastSentAt) < registrationOTPMinResend {
+			return errors.New("please wait before requesting another code")
+		}
+	}
+
+	expires := time.Now().Add(registrationOTPTTL)
+	now := time.Now()
+
+	if s.twilioVerify == nil || !s.twilioVerify.Enabled() {
+		return errors.New("Twilio Verify is not configured")
+	}
+	toE164 := PhoneKeyToE164Plus(phoneKey)
+	verificationSid, err := s.twilioVerify.StartVerification(ctx, toE164)
+	if err != nil {
+		return MapStartVerificationError(err)
+	}
+	return s.otpRepo.Upsert(ctx, phoneKey, repositories.PhoneOTPPurposeRegistration, verificationSid, expires, now)
+}
+
+func (s *authService) RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, password, name string) (*models.User, string, error) {
+	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	if err != nil {
+		return nil, "", err
+	}
+	ch, err := s.otpRepo.Get(ctx, phoneKey, repositories.PhoneOTPPurposeRegistration)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, "", errors.New("no verification code for this number; request a new code")
+		}
+		return nil, "", err
+	}
+	if time.Now().After(ch.ExpiresAt) {
+		_ = s.otpRepo.Delete(ctx, ch.ID)
+		return nil, "", errors.New("verification code has expired; request a new code")
+	}
+	if ch.Attempts >= maxRegistrationOTPVerify {
+		return nil, "", errors.New("too many incorrect attempts; request a new code")
+	}
+
+	if s.twilioVerify == nil || !s.twilioVerify.Enabled() {
+		return nil, "", errors.New("Twilio Verify is not configured")
+	}
+	toE164 := PhoneKeyToE164Plus(phoneKey)
+	if err := s.twilioVerify.CheckVerification(ctx, toE164, strings.TrimSpace(otpCode)); err != nil {
+		_ = s.otpRepo.IncrementAttempts(ctx, ch.ID)
+		return nil, "", errors.New("invalid verification code")
+	}
+
+	dup, errDup := s.userRepo.GetByPhoneKey(ctx, phoneKey)
+	if errDup != nil && errDup != mongo.ErrNoDocuments {
+		return nil, "", errDup
+	}
+	if errDup == nil && dup != nil {
+		return nil, "", errors.New("an account with this phone already exists")
+	}
+	existing, _ := s.userRepo.GetByEmail(ctx, email)
+	if existing != nil {
+		return nil, "", errors.New("user already exists")
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, "", err
+	}
+	phoneStr := toE164
+	user := &models.User{
+		Email:         email,
+		PasswordHash:  string(hashedPassword),
+		Name:          name,
+		Role:          "customer",
+		Active:        true,
+		EmailVerified: false,
+		Phone:         &phoneStr,
+		PhoneKey:      phoneKey,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		return nil, "", err
+	}
+	_ = s.otpRepo.Delete(ctx, ch.ID)
+
+	token, err := s.GenerateToken(user)
+	if err != nil {
+		return nil, "", err
+	}
+	return user, token, nil
+}
+
+func (s *authService) SendLoginOTP(ctx context.Context, phoneRaw string) error {
+	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	if err != nil {
+		return err
+	}
+	u, err := s.userRepo.GetByPhoneKey(ctx, phoneKey)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return errors.New("no account found for this phone number")
+		}
+		return err
+	}
+	// Backfill phone_key / canonical phone when user was saved with phone only (e.g. old profile update)
+	if u.PhoneKey != phoneKey {
+		canonical := PhoneKeyToE164Plus(phoneKey)
+		u.PhoneKey = phoneKey
+		u.Phone = &canonical
+		_ = s.userRepo.Update(ctx, u.ID, u)
+	}
+	if !u.Active {
+		return errors.New("account is deactivated")
+	}
+	if u.Role != "customer" {
+		return errors.New("use email sign-in for this account")
+	}
+
+	existing, err := s.otpRepo.Get(ctx, phoneKey, repositories.PhoneOTPPurposeLogin)
+	if err == nil && existing != nil {
+		if time.Since(existing.LastSentAt) < registrationOTPMinResend {
+			return errors.New("please wait before requesting another code")
+		}
+	}
+
+	expires := time.Now().Add(registrationOTPTTL)
+	now := time.Now()
+
+	if s.twilioVerify == nil || !s.twilioVerify.Enabled() {
+		return errors.New("Twilio Verify is not configured")
+	}
+	toE164 := PhoneKeyToE164Plus(phoneKey)
+	verificationSid, err := s.twilioVerify.StartVerification(ctx, toE164)
+	if err != nil {
+		return MapStartVerificationError(err)
+	}
+	return s.otpRepo.Upsert(ctx, phoneKey, repositories.PhoneOTPPurposeLogin, verificationSid, expires, now)
+}
+
+func (s *authService) LoginWithPhoneOTP(ctx context.Context, phoneRaw, otpCode string) (*models.User, string, error) {
+	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	if err != nil {
+		return nil, "", err
+	}
+	ch, err := s.otpRepo.Get(ctx, phoneKey, repositories.PhoneOTPPurposeLogin)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, "", errors.New("no verification code for this number; request a new code")
+		}
+		return nil, "", err
+	}
+	if time.Now().After(ch.ExpiresAt) {
+		_ = s.otpRepo.Delete(ctx, ch.ID)
+		return nil, "", errors.New("verification code has expired; request a new code")
+	}
+	if ch.Attempts >= maxRegistrationOTPVerify {
+		return nil, "", errors.New("too many incorrect attempts; request a new code")
+	}
+
+	if s.twilioVerify == nil || !s.twilioVerify.Enabled() {
+		return nil, "", errors.New("Twilio Verify is not configured")
+	}
+	toE164 := PhoneKeyToE164Plus(phoneKey)
+	if err := s.twilioVerify.CheckVerification(ctx, toE164, strings.TrimSpace(otpCode)); err != nil {
+		_ = s.otpRepo.IncrementAttempts(ctx, ch.ID)
+		return nil, "", errors.New("invalid verification code")
+	}
+
+	user, err := s.userRepo.GetByPhoneKey(ctx, phoneKey)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, "", errors.New("no account found for this phone number")
+		}
+		return nil, "", err
+	}
+	if !user.Active {
+		return nil, "", errors.New("account is deactivated")
+	}
+	if user.Role != "customer" {
+		return nil, "", errors.New("use email sign-in for this account")
+	}
+
+	_ = s.otpRepo.Delete(ctx, ch.ID)
+
+	token, err := s.GenerateToken(user)
+	if err != nil {
+		return nil, "", err
+	}
+	return user, token, nil
 }

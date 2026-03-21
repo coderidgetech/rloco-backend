@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -53,6 +54,26 @@ type Config struct {
 	ShippoParcelWeight  string
 	ShippoDistanceUnit  string
 	ShippoMassUnit      string
+	// Twilio Verify — required for registration OTP (no fallback)
+	TwilioAccountSid       string
+	TwilioAuthToken        string
+	TwilioVerifyServiceSid string // Verify Service SID (VA...)
+	// OTPDefaultCountryCode — digits only (e.g. 91); prefixed when user enters a 10-digit local number
+	OTPDefaultCountryCode string
+}
+
+// ValidateTwilioVerify returns an error if Twilio Verify env is incomplete (registration OTP will not work).
+func (c *Config) ValidateTwilioVerify() error {
+	if strings.TrimSpace(c.TwilioAccountSid) == "" {
+		return fmt.Errorf("TWILIO_ACCOUNT_SID is required")
+	}
+	if strings.TrimSpace(c.TwilioAuthToken) == "" {
+		return fmt.Errorf("TWILIO_AUTH_TOKEN is required")
+	}
+	if strings.TrimSpace(c.TwilioVerifyServiceSid) == "" {
+		return fmt.Errorf("TWILIO_VERIFY_SERVICE_SID is required")
+	}
+	return nil
 }
 
 func Load() (*Config, error) {
@@ -110,6 +131,10 @@ func Load() (*Config, error) {
 		ShippoParcelWeight:  getEnv("SHIPPO_PARCEL_WEIGHT", "0.5"),
 		ShippoDistanceUnit:  getEnv("SHIPPO_DISTANCE_UNIT", "in"),
 		ShippoMassUnit:      getEnv("SHIPPO_MASS_UNIT", "lb"),
+		TwilioAccountSid:       getEnv("TWILIO_ACCOUNT_SID", ""),
+		TwilioAuthToken:        getEnv("TWILIO_AUTH_TOKEN", ""),
+		TwilioVerifyServiceSid: getEnv("TWILIO_VERIFY_SERVICE_SID", ""),
+		OTPDefaultCountryCode:  getEnv("OTP_DEFAULT_COUNTRY_CODE", "91"),
 	}, nil
 }
 

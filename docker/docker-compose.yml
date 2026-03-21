@@ -44,9 +44,14 @@ services:
     container_name: rloco-backend
     ports:
       - "8080:8080"
+    # Loads TWILIO_* and other secrets from backend/.env when present
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       - PORT=8080
       - ENV=development
+      # Phone OTP requires Twilio — set TWILIO_* in backend/.env (loaded via env_file above)
       - MONGODB_URI=mongodb://admin:password@mongodb:27017/rloco?authSource=admin
       - JWT_SECRET=your-secret-key-change-in-production
       - JWT_EXPIRY=24h

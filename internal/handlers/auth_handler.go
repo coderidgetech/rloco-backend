@@ -33,6 +33,97 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+func (h *AuthHandler) setAuthCookie(c *gin.Context, token string) {
+	c.SetCookie(
+		"auth_token",
+		token,
+		86400*7,
+		"/",
+		"",
+		c.GetHeader("X-Forwarded-Proto") == "https" || c.Request.TLS != nil,
+		true,
+	)
+}
+
+// SendRegistrationOTP sends an OTP via Twilio Verify (SMS) for phone-verified signup.
+func (h *AuthHandler) SendRegistrationOTP(c *gin.Context) {
+	var req struct {
+		Phone string `json:"phone" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.authService.SendRegistrationOTP(c.Request.Context(), req.Phone); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "verification code sent"})
+}
+
+// CompleteRegistrationOTP verifies the OTP and creates the account.
+func (h *AuthHandler) CompleteRegistrationOTP(c *gin.Context) {
+	var req struct {
+		Phone    string `json:"phone" binding:"required"`
+		Code     string `json:"code" binding:"required,len=6"`
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required,min=6"`
+		Name     string `json:"name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	user, token, err := h.authService.RegisterWithPhoneOTP(c.Request.Context(), req.Phone, req.Code, req.Email, req.Password, req.Name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.setAuthCookie(c, token)
+	c.JSON(http.StatusCreated, gin.H{
+		"user":  user,
+		"token": token,
+	})
+}
+
+// SendLoginOTP sends an OTP via Twilio Verify (SMS) for existing customers with this phone.
+func (h *AuthHandler) SendLoginOTP(c *gin.Context) {
+	var req struct {
+		Phone string `json:"phone" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.authService.SendLoginOTP(c.Request.Context(), req.Phone); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "verification code sent"})
+}
+
+// CompleteLoginOTP verifies the OTP and issues a session (cookie + token body).
+func (h *AuthHandler) CompleteLoginOTP(c *gin.Context) {
+	var req struct {
+		Phone string `json:"phone" binding:"required"`
+		Code  string `json:"code" binding:"required,len=6"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	user, token, err := h.authService.LoginWithPhoneOTP(c.Request.Context(), req.Phone, req.Code)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.setAuthCookie(c, token)
+	c.JSON(http.StatusOK, gin.H{
+		"user":  user,
+		"token": token,
+	})
+}
+
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -46,16 +137,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Set HttpOnly cookie with JWT token
-	c.SetCookie(
-		"auth_token",           // name
-		token,                  // value
-		86400*7,               // maxAge: 7 days in seconds
-		"/",                    // path
-		"",                     // domain (empty for current domain)
-		c.GetHeader("X-Forwarded-Proto") == "https" || c.Request.TLS != nil, // secure: true in production
-		true,                   // httpOnly: prevent XSS attacks
-	)
+	h.setAuthCookie(c, token)
 
 	// Return token in body for mobile clients (web uses HttpOnly cookie)
 	c.JSON(http.StatusCreated, gin.H{
@@ -77,16 +159,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Set HttpOnly cookie with JWT token
-	c.SetCookie(
-		"auth_token",           // name
-		token,                  // value
-		86400*7,               // maxAge: 7 days in seconds
-		"/",                    // path
-		"",                     // domain (empty for current domain)
-		c.GetHeader("X-Forwarded-Proto") == "https" || c.Request.TLS != nil, // secure: true in production
-		true,                   // httpOnly: prevent XSS attacks
-	)
+	h.setAuthCookie(c, token)
 
 	// Return token in body for mobile clients (web uses HttpOnly cookie)
 	c.JSON(http.StatusOK, gin.H{
@@ -110,15 +183,7 @@ func (h *AuthHandler) GoogleSignIn(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie(
-		"auth_token",
-		token,
-		86400*7,
-		"/",
-		"",
-		c.GetHeader("X-Forwarded-Proto") == "https" || c.Request.TLS != nil,
-		true,
-	)
+	h.setAuthCookie(c, token)
 
 	c.JSON(http.StatusOK, gin.H{
 		"user":  user,
@@ -264,6 +329,8 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	var req struct {
 		Phone    *string `json:"phone,omitempty"`
 		Birthday *string `json:"birthday,omitempty"` // ISO 8601 format: "2006-01-02"
+		Name     *string `json:"name,omitempty"`
+		Email    *string `json:"email,omitempty" binding:"omitempty,email"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -282,7 +349,7 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		birthday = &parsed
 	}
 
-	if err := h.authService.UpdateProfile(c.Request.Context(), userIDStr, phone, birthday); err != nil {
+	if err := h.authService.UpdateProfile(c.Request.Context(), userIDStr, phone, birthday, req.Name, req.Email); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
