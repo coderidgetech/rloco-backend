@@ -18,8 +18,10 @@ vendor/
 # Go workspace file
 go.work
 
-# Environment variables
+# Environment variables (do not commit)
 .env
+.env.example
+.env.*.local
 
 # IDE
 .idea/
