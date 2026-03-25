@@ -36,6 +36,10 @@ func (r *paymentRepository) Create(ctx context.Context, transaction *models.Paym
 	transaction.CreatedAt = time.Now()
 	transaction.UpdatedAt = time.Now()
 	transaction.Status = "pending"
+	// Preserve unique index compatibility before gateway returns its transaction ID.
+	if transaction.GatewayTransactionID == "" {
+		transaction.GatewayTransactionID = transaction.ID.Hex()
+	}
 
 	_, err := r.collection.InsertOne(ctx, transaction)
 	return err

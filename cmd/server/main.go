@@ -161,7 +161,8 @@ func main() {
 			auth.POST("/login-otp/complete", authHandler.CompleteLoginOTP)
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/google", authHandler.GoogleSignIn)
-			auth.POST("/logout", middleware.AuthRequired(), authHandler.Logout)
+			// No AuthRequired: allow clearing cookie when JWT is missing/expired
+			auth.POST("/logout", authHandler.Logout)
 			auth.GET("/me", middleware.AuthRequired(), authHandler.GetMe)
 			auth.DELETE("/me", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.DeleteAccount)
 			auth.POST("/refresh", authHandler.Refresh)
