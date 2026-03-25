@@ -50,8 +50,7 @@ type authService struct {
 	twilioVerify       *TwilioVerifyClient
 	secret             string
 	expiry             time.Duration
-	googleClientID     string
-	defaultCountryCode string
+	googleClientID string
 }
 
 type Claims struct {
@@ -71,14 +70,10 @@ func NewAuthService(
 	secret string,
 	expiryStr string,
 	googleClientID string,
-	defaultCountryCode string,
 ) AuthService {
 	expiry, _ := time.ParseDuration(expiryStr)
 	if expiry == 0 {
 		expiry = 24 * time.Hour
-	}
-	if defaultCountryCode == "" {
-		defaultCountryCode = "91"
 	}
 
 	return &authService{
@@ -91,7 +86,6 @@ func NewAuthService(
 		secret:             secret,
 		expiry:             expiry,
 		googleClientID:     googleClientID,
-		defaultCountryCode: defaultCountryCode,
 	}
 }
 
@@ -415,7 +409,7 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *s
 			user.Phone = nil
 			user.PhoneKey = ""
 		} else {
-			pk, err := NormalizePhoneKey(raw, s.defaultCountryCode)
+			pk, err := NormalizePhoneKey(raw)
 			if err != nil {
 				return errors.New("invalid phone number")
 			}
@@ -482,7 +476,7 @@ const (
 )
 
 func (s *authService) SendRegistrationOTP(ctx context.Context, phoneRaw string) error {
-	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	phoneKey, err := NormalizePhoneKey(phoneRaw)
 	if err != nil {
 		return err
 	}
@@ -516,7 +510,7 @@ func (s *authService) SendRegistrationOTP(ctx context.Context, phoneRaw string) 
 }
 
 func (s *authService) RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, password, name string) (*models.User, string, error) {
-	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	phoneKey, err := NormalizePhoneKey(phoneRaw)
 	if err != nil {
 		return nil, "", err
 	}
@@ -586,7 +580,7 @@ func (s *authService) RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCod
 }
 
 func (s *authService) SendLoginOTP(ctx context.Context, phoneRaw string) error {
-	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	phoneKey, err := NormalizePhoneKey(phoneRaw)
 	if err != nil {
 		return err
 	}
@@ -633,7 +627,7 @@ func (s *authService) SendLoginOTP(ctx context.Context, phoneRaw string) error {
 }
 
 func (s *authService) LoginWithPhoneOTP(ctx context.Context, phoneRaw, otpCode string) (*models.User, string, error) {
-	phoneKey, err := NormalizePhoneKey(phoneRaw, s.defaultCountryCode)
+	phoneKey, err := NormalizePhoneKey(phoneRaw)
 	if err != nil {
 		return nil, "", err
 	}

@@ -58,8 +58,6 @@ type Config struct {
 	TwilioAccountSid       string
 	TwilioAuthToken        string
 	TwilioVerifyServiceSid string // Verify Service SID (VA...)
-	// OTPDefaultCountryCode — digits only (e.g. 91); prefixed when user enters a 10-digit local number
-	OTPDefaultCountryCode string
 }
 
 // ValidateTwilioVerify returns an error if Twilio Verify env is incomplete (registration OTP will not work).
@@ -134,7 +132,6 @@ func Load() (*Config, error) {
 		TwilioAccountSid:       getEnv("TWILIO_ACCOUNT_SID", ""),
 		TwilioAuthToken:        getEnv("TWILIO_AUTH_TOKEN", ""),
 		TwilioVerifyServiceSid: getEnv("TWILIO_VERIFY_SERVICE_SID", ""),
-		OTPDefaultCountryCode:  getEnv("OTP_DEFAULT_COUNTRY_CODE", "91"),
 	}, nil
 }
 

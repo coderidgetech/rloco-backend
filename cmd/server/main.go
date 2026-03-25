@@ -72,7 +72,6 @@ func main() {
 		cfg.JWTSecret,
 		cfg.JWTExpiry,
 		cfg.GoogleClientID,
-		cfg.OTPDefaultCountryCode,
 	)
 	productService := services.NewProductService(productRepo)
 	categoryService := services.NewCategoryService(categoryRepo)
