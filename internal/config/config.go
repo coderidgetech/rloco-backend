@@ -74,6 +74,14 @@ func (c *Config) ValidateTwilioVerify() error {
 	return nil
 }
 
+// EmailConfigReady returns true when SMTP configuration is sufficient to send emails.
+func (c *Config) EmailConfigReady() bool {
+	return strings.TrimSpace(c.SMTPHost) != "" &&
+		strings.TrimSpace(c.SMTPPort) != "" &&
+		strings.TrimSpace(c.SMTPUser) != "" &&
+		strings.TrimSpace(c.SMTPPassword) != ""
+}
+
 func Load() (*Config, error) {
 	// Load .env from current directory (e.g. when run from backend/) and from backend/.env (when run from repo root)
 	_ = godotenv.Load(".env")
@@ -98,12 +106,12 @@ func Load() (*Config, error) {
 		StorageSecretKey:    getEnv("STORAGE_SECRET_KEY", "minioadmin"),
 		StorageBucket:       getEnv("STORAGE_BUCKET", "rloco-uploads"),
 		StoragePublicURL:    getEnv("STORAGE_PUBLIC_URL", ""),
-		SMTPHost:            getEnv("SMTP_HOST", ""),
+		SMTPHost:            firstNonEmptyEnv("SMTP_HOST", "EMAIL_HOST"),
 		SMTPPort:            getEnv("SMTP_PORT", "587"),
-		SMTPUser:            getEnv("SMTP_USER", ""),
-		SMTPPassword:        getEnv("SMTP_PASSWORD", ""),
-		SMTPFrom:            getEnv("SMTP_FROM", "noreply@rloco.com"),
-		SMTPFromName:        getEnv("SMTP_FROM_NAME", "R-Loko"),
+		SMTPUser:            firstNonEmptyEnv("SMTP_USER", "SMTP_USERNAME", "EMAIL_USER"),
+		SMTPPassword:        firstNonEmptyEnv("SMTP_PASSWORD", "SMTP_PASS", "EMAIL_PASSWORD"),
+		SMTPFrom:            firstNonEmptyEnvWithDefault("noreply@rloco.com", "SMTP_FROM", "SMTP_FROM_EMAIL", "EMAIL_FROM"),
+		SMTPFromName:        firstNonEmptyEnvWithDefault("R-Loko", "SMTP_FROM_NAME", "EMAIL_FROM_NAME"),
 		AppBaseURL:          getEnv("APP_BASE_URL", "https://rloco.com"),
 		AdminEmail:          getEnv("ADMIN_EMAIL", ""),
 		StripeSecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
@@ -137,6 +145,22 @@ func Load() (*Config, error) {
 
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyEnvWithDefault(defaultValue string, keys ...string) string {
+	if value := firstNonEmptyEnv(keys...); value != "" {
 		return value
 	}
 	return defaultValue

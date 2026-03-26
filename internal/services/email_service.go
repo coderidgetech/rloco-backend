@@ -47,8 +47,11 @@ func NewEmailService(smtpHost, smtpPort, smtpUser, smtpPassword, fromEmail, from
 }
 
 func (s *emailService) sendEmail(to, subject, body string) error {
-	if s.smtpHost == "" || s.smtpPort == "" {
-		log.Printf("[Email] Not configured: would send to %s: %s", to, subject)
+	if strings.TrimSpace(s.smtpHost) == "" ||
+		strings.TrimSpace(s.smtpPort) == "" ||
+		strings.TrimSpace(s.smtpUser) == "" ||
+		strings.TrimSpace(s.smtpPassword) == "" {
+		log.Printf("[Email] Not configured (need SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD): would send to %s: %s", to, subject)
 		return nil
 	}
 

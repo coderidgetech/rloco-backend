@@ -23,6 +23,9 @@ func main() {
 	if err := cfg.ValidateTwilioVerify(); err != nil {
 		log.Fatal("Twilio Verify is required for phone OTP (set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID): ", err)
 	}
+	if !cfg.EmailConfigReady() {
+		log.Println("WARNING: Email notifications are disabled. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD (or supported aliases) to enable delivery.")
+	}
 
 	// Initialize database
 	db, err := repositories.NewMongoDB(cfg.MongoDBURI)

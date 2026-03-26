@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"rloco-backend/internal/models"
@@ -50,6 +51,10 @@ func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo reposi
 }
 
 func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64) (*models.Order, error) {
+	if _, ok := normalizeSupportedCountry(shippingInfo.Country); !ok {
+		return nil, errors.New("unsupported shipping country: only India and United States are allowed")
+	}
+
 	// Calculate subtotal
 	var subtotal float64
 	for _, item := range items {
@@ -186,6 +191,18 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	}()
 
 	return order, nil
+}
+
+func normalizeSupportedCountry(input string) (string, bool) {
+	country := strings.TrimSpace(strings.ToLower(input))
+	switch country {
+	case "india", "in":
+		return "India", true
+	case "united states", "us", "usa":
+		return "United States", true
+	default:
+		return "", false
+	}
 }
 
 func normalizeShippingCostUSD(amount float64, currency string) float64 {

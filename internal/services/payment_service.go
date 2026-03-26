@@ -64,6 +64,12 @@ func (s *paymentService) CreatePaymentIntent(ctx context.Context, orderID primit
 	if err != nil {
 		return nil, errors.New("order not found")
 	}
+	if expected, ok := expectedCurrencyByCountry(order.ShippingInfo.Country); ok {
+		incoming := strings.ToLower(strings.TrimSpace(currency))
+		if incoming != expected {
+			return nil, fmt.Errorf("currency mismatch for shipping country: expected %s", expected)
+		}
+	}
 
 	// Create payment transaction record
 	transaction := &models.PaymentTransaction{
@@ -291,4 +297,15 @@ func (s *paymentService) RefundPayment(ctx context.Context, transactionID primit
 
 func (s *paymentService) GetTransaction(ctx context.Context, id primitive.ObjectID) (*models.PaymentTransaction, error) {
 	return s.paymentRepo.GetByID(ctx, id)
+}
+
+func expectedCurrencyByCountry(country string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(country)) {
+	case "india", "in":
+		return "inr", true
+	case "united states", "us", "usa":
+		return "usd", true
+	default:
+		return "", false
+	}
 }
