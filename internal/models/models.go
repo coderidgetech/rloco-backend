@@ -181,6 +181,7 @@ type Vendor struct {
 	Logo             string                 `bson:"logo" json:"logo"`
 	SubscriptionPlan string                 `bson:"subscription_plan" json:"subscription_plan"`
 	Permissions      map[string]interface{} `bson:"permissions" json:"permissions"`
+	Preferences      map[string]interface{} `bson:"preferences,omitempty" json:"preferences,omitempty"`
 	Status           string                 `bson:"status" json:"status"` // "active", "suspended", "pending"
 	CreatedAt        time.Time              `bson:"created_at" json:"created_at"`
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updated_at"`

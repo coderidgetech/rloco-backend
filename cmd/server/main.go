@@ -126,6 +126,7 @@ func main() {
 	videoHandler := handlers.NewVideoHandler(videoService)
 	addressHandler := handlers.NewAddressHandler(addressService)
 	newsletterHandler := handlers.NewNewsletterHandler(newsletterService)
+	vendorHandler := handlers.NewVendorHandler(vendorService)
 
 	// Setup router
 	if cfg.Env == "production" {
@@ -356,11 +357,21 @@ func main() {
 			upload.DELETE("/:filename", uploadHandler.Delete)
 		}
 
-		// Admin routes
+		// Vendor self-service (vendor JWT only)
+		vendorSelf := api.Group("/vendor")
+		vendorSelf.Use(middleware.AuthRequired())
+		vendorSelf.Use(middleware.LoadUserMiddleware(userRepo))
+		vendorSelf.Use(middleware.RequireRole("vendor"))
+		{
+			vendorSelf.GET("/me", vendorHandler.GetMe)
+			vendorSelf.PUT("/me", vendorHandler.UpdateMe)
+		}
+
+		// Admin routes (admin + vendor; sensitive routes require admin only)
 		admin := api.Group("/admin")
 		admin.Use(middleware.AuthRequired())
 		admin.Use(middleware.LoadUserMiddleware(userRepo))
-		admin.Use(middleware.RequireRole("admin"))
+		admin.Use(middleware.RequireRole("admin", "vendor"))
 		{
 			// Dashboard
 			admin.GET("/dashboard/stats", adminHandler.GetDashboardStats)
@@ -369,20 +380,20 @@ func main() {
 			admin.GET("/dashboard/products", adminHandler.GetDashboardProducts)
 
 			// Customers
-			admin.GET("/customers", adminHandler.ListCustomers)
-			admin.GET("/customers/:id", adminHandler.GetCustomer)
-			admin.PUT("/customers/:id", adminHandler.UpdateCustomer)
+			admin.GET("/customers", middleware.RequireRole("admin"), adminHandler.ListCustomers)
+			admin.GET("/customers/:id", middleware.RequireRole("admin"), adminHandler.GetCustomer)
+			admin.PUT("/customers/:id", middleware.RequireRole("admin"), adminHandler.UpdateCustomer)
 
 			// Vendors
-			admin.GET("/vendors", adminHandler.ListVendors)
-			admin.GET("/vendors/:id", adminHandler.GetVendor)
+			admin.GET("/vendors", middleware.RequireRole("admin"), adminHandler.ListVendors)
+			admin.GET("/vendors/:id", middleware.RequireRole("admin"), adminHandler.GetVendor)
 			admin.POST("/vendors", middleware.RequireRole("admin"), adminHandler.CreateVendor)
 			admin.PUT("/vendors/:id", middleware.RequireRole("admin"), adminHandler.UpdateVendor)
 			admin.DELETE("/vendors/:id", middleware.RequireRole("admin"), adminHandler.DeleteVendor)
 			admin.PUT("/vendors/:id/permissions", middleware.RequireRole("admin"), adminHandler.UpdateVendorPermissions)
 
 			// Promotions
-			admin.GET("/promotions", adminHandler.ListPromotions)
+			admin.GET("/promotions", middleware.RequireRole("admin"), adminHandler.ListPromotions)
 			admin.POST("/promotions", middleware.RequireRole("admin"), adminHandler.CreatePromotion)
 			admin.PUT("/promotions/:id", middleware.RequireRole("admin"), adminHandler.UpdatePromotion)
 			admin.DELETE("/promotions/:id", middleware.RequireRole("admin"), adminHandler.DeletePromotion)
@@ -391,11 +402,11 @@ func main() {
 			admin.GET("/analytics/revenue", adminHandler.GetRevenueAnalytics)
 			admin.GET("/analytics/orders", adminHandler.GetOrderAnalytics)
 			admin.GET("/analytics/products", adminHandler.GetProductAnalytics)
-			admin.GET("/analytics/customers", adminHandler.GetCustomerAnalytics)
-			admin.GET("/analytics/traffic", adminHandler.GetTrafficAnalytics)
+			admin.GET("/analytics/customers", middleware.RequireRole("admin"), adminHandler.GetCustomerAnalytics)
+			admin.GET("/analytics/traffic", middleware.RequireRole("admin"), adminHandler.GetTrafficAnalytics)
 
 			// Content
-			admin.GET("/content", adminHandler.GetContent)
+			admin.GET("/content", middleware.RequireRole("admin"), adminHandler.GetContent)
 			admin.PUT("/content", middleware.RequireRole("admin"), adminHandler.UpdateContent)
 
 			// Settings
@@ -403,7 +414,7 @@ func main() {
 			admin.PUT("/settings", middleware.RequireRole("admin"), adminHandler.UpdateSettings)
 
 			// Configuration
-			admin.GET("/configuration", adminHandler.GetConfiguration)
+			admin.GET("/configuration", middleware.RequireRole("admin"), adminHandler.GetConfiguration)
 			admin.PUT("/configuration", middleware.RequireRole("admin"), adminHandler.UpdateConfiguration)
 
 			// Reviews
