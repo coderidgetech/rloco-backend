@@ -10,6 +10,35 @@ import (
 	"rloco-backend/internal/services"
 )
 
+func requesterFromContext(c *gin.Context) (primitive.ObjectID, string, bool) {
+	roleVal, ok := c.Get("role")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Role missing"})
+		return primitive.NilObjectID, "", false
+	}
+	role, ok := roleVal.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid role"})
+		return primitive.NilObjectID, "", false
+	}
+	userIDVal, ok := c.Get("user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User missing"})
+		return primitive.NilObjectID, "", false
+	}
+	userIDStr, ok := userIDVal.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user"})
+		return primitive.NilObjectID, "", false
+	}
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user"})
+		return primitive.NilObjectID, "", false
+	}
+	return userID, role, true
+}
+
 type PaymentHandler struct {
 	paymentService services.PaymentService
 }
@@ -23,7 +52,7 @@ func (h *PaymentHandler) CreatePaymentIntent(c *gin.Context) {
 		OrderID        string  `json:"order_id" binding:"required"`
 		Amount         float64 `json:"amount" binding:"required"`
 		Currency       string  `json:"currency" binding:"required"`
-		Gateway        string  `json:"gateway" binding:"required"` // "stripe" or "paypal"
+		Gateway        string  `json:"gateway" binding:"required"` // "stripe"
 		PaymentMethod  string  `json:"payment_method"`               // "card", "upi", "wallet" - so Stripe shows correct method (e.g. UPI first for INR)
 	}
 
@@ -32,8 +61,8 @@ func (h *PaymentHandler) CreatePaymentIntent(c *gin.Context) {
 		return
 	}
 
-	if req.Gateway != "stripe" && req.Gateway != "paypal" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "gateway must be 'stripe' or 'paypal'"})
+	if req.Gateway != "stripe" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "gateway must be 'stripe'"})
 		return
 	}
 
@@ -49,7 +78,11 @@ func (h *PaymentHandler) CreatePaymentIntent(c *gin.Context) {
 	// Normalize so "INR" from client becomes "inr" for Stripe
 	req.Currency = strings.ToLower(strings.TrimSpace(req.Currency))
 
-	intent, err := h.paymentService.CreatePaymentIntent(c.Request.Context(), orderID, req.Amount, req.Currency, req.Gateway, req.PaymentMethod)
+	userID, role, ok := requesterFromContext(c)
+	if !ok {
+		return
+	}
+	intent, err := h.paymentService.CreatePaymentIntent(c.Request.Context(), userID, role, orderID, req.Amount, req.Currency, req.Gateway, req.PaymentMethod)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -70,7 +103,16 @@ func (h *PaymentHandler) ProcessPayment(c *gin.Context) {
 		return
 	}
 
-	if err := h.paymentService.ProcessPayment(c.Request.Context(), req.PaymentIntentID, req.PaymentMethodID, req.Gateway); err != nil {
+	if req.Gateway != "stripe" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "gateway must be 'stripe'"})
+		return
+	}
+
+	userID, role, ok := requesterFromContext(c)
+	if !ok {
+		return
+	}
+	if err := h.paymentService.ProcessPayment(c.Request.Context(), userID, role, req.PaymentIntentID, req.PaymentMethodID, req.Gateway); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -80,7 +122,7 @@ func (h *PaymentHandler) ProcessPayment(c *gin.Context) {
 
 func (h *PaymentHandler) HandleWebhook(c *gin.Context) {
 	gateway := c.Param("gateway")
-	if gateway != "stripe" && gateway != "paypal" {
+	if gateway != "stripe" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid gateway"})
 		return
 	}
@@ -92,11 +134,7 @@ func (h *PaymentHandler) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	// Get signature from header
 	signature := c.GetHeader("X-Stripe-Signature")
-	if gateway == "paypal" {
-		signature = c.GetHeader("PAYPAL-AUTH-ALGO")
-	}
 
 	if err := h.paymentService.HandleWebhook(c.Request.Context(), gateway, payload, signature); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -137,9 +175,17 @@ func (h *PaymentHandler) GetTransaction(c *gin.Context) {
 		return
 	}
 
-	transaction, err := h.paymentService.GetTransaction(c.Request.Context(), id)
+	userID, role, ok := requesterFromContext(c)
+	if !ok {
+		return
+	}
+	transaction, err := h.paymentService.GetTransaction(c.Request.Context(), userID, role, id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
+		status := http.StatusNotFound
+		if strings.Contains(strings.ToLower(err.Error()), "access denied") {
+			status = http.StatusForbidden
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 

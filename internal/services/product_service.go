@@ -17,10 +17,10 @@ type ProductService interface {
 	Update(ctx context.Context, id primitive.ObjectID, product *models.Product) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	List(ctx context.Context, filter map[string]interface{}, limit, skip int, sort string) ([]*models.Product, int64, error)
-	GetFeatured(ctx context.Context, limit int) ([]*models.Product, error)
-	GetNewArrivals(ctx context.Context, limit int) ([]*models.Product, error)
-	GetOnSale(ctx context.Context, limit int) ([]*models.Product, error)
-	Search(ctx context.Context, query string, limit, skip int) ([]*models.Product, int64, error)
+	GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error)
+	GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error)
+	GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error)
+	Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error)
 }
 
 type productService struct {
@@ -95,6 +95,10 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 		}
 	}
 
+	if market, ok := filter["market"].(string); ok && (market == "IN" || market == "US") {
+		bsonFilter = repositories.MergeMarketFilter(bsonFilter, market)
+	}
+
 	sortBSON := bson.M{}
 	if sort != "" {
 		switch sort {
@@ -114,22 +118,22 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 	return s.repo.List(ctx, bsonFilter, limit, skip, sortBSON)
 }
 
-func (s *productService) GetFeatured(ctx context.Context, limit int) ([]*models.Product, error) {
-	return s.repo.GetFeatured(ctx, limit)
+func (s *productService) GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error) {
+	return s.repo.GetFeatured(ctx, limit, market)
 }
 
-func (s *productService) GetNewArrivals(ctx context.Context, limit int) ([]*models.Product, error) {
-	return s.repo.GetNewArrivals(ctx, limit)
+func (s *productService) GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error) {
+	return s.repo.GetNewArrivals(ctx, limit, market)
 }
 
-func (s *productService) GetOnSale(ctx context.Context, limit int) ([]*models.Product, error) {
-	return s.repo.GetOnSale(ctx, limit)
+func (s *productService) GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error) {
+	return s.repo.GetOnSale(ctx, limit, market)
 }
 
-func (s *productService) Search(ctx context.Context, query string, limit, skip int) ([]*models.Product, int64, error) {
+func (s *productService) Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error) {
 	if query == "" {
 		return nil, 0, errors.New("search query cannot be empty")
 	}
-	return s.repo.Search(ctx, query, limit, skip)
+	return s.repo.Search(ctx, query, limit, skip, market)
 }
 

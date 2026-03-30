@@ -52,6 +52,8 @@ type Product struct {
 	Badge            *string             `bson:"badge,omitempty" json:"badge,omitempty"`
 	VideoURL         *string             `bson:"video_url,omitempty" json:"video_url,omitempty"`
 	Stock            map[string]int      `bson:"stock" json:"stock"` // size -> quantity
+	// AvailableMarkets lists markets where the product is sold (e.g. "IN", "US").
+	AvailableMarkets []string            `bson:"available_markets,omitempty" json:"available_markets,omitempty"`
 	VendorID         *primitive.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
 	CreatedAt        time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt        time.Time           `bson:"updated_at" json:"updated_at"`
@@ -120,12 +122,8 @@ type ShippingInfo struct {
 
 // PaymentInfo represents payment information
 type PaymentInfo struct {
-	CardNumber  string `bson:"card_number,omitempty" json:"card_number,omitempty"`
-	CardName    string `bson:"card_name,omitempty" json:"card_name,omitempty"`
-	ExpiryDate  string `bson:"expiry_date,omitempty" json:"expiry_date,omitempty"`
-	CVV         string `bson:"cvv,omitempty" json:"cvv,omitempty"`
-	UPIID       string `bson:"upi_id,omitempty" json:"upi_id,omitempty"`
-	WalletName  string `bson:"wallet_name,omitempty" json:"wallet_name,omitempty"`
+	UPIID      string `bson:"upi_id,omitempty" json:"upi_id,omitempty"`
+	WalletName string `bson:"wallet_name,omitempty" json:"wallet_name,omitempty"`
 }
 
 // Cart represents a shopping cart

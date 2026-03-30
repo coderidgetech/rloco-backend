@@ -311,6 +311,14 @@ func (h *OrderHandler) Track(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
 		return
 	}
+	role, _ := c.Get("role")
+	userIDVal, _ := c.Get("user_id")
+	userIDStr, _ := userIDVal.(string)
+	userIDObj, _ := primitive.ObjectIDFromHex(userIDStr)
+	if role != "admin" && order.UserID != userIDObj {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
 
 	c.JSON(http.StatusOK, order)
 }

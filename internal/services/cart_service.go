@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"rloco-backend/internal/models"
@@ -34,6 +35,24 @@ func (s *cartService) Get(ctx context.Context, userID primitive.ObjectID) (*mode
 }
 
 func (s *cartService) AddItem(ctx context.Context, userID primitive.ObjectID, item models.CartItem) error {
+	product, err := s.productRepo.GetByID(ctx, item.ProductID)
+	if err != nil {
+		return errors.New("product not found")
+	}
+	if item.Quantity <= 0 {
+		return errors.New("quantity must be at least 1")
+	}
+	if product.Stock[item.Size] < item.Quantity {
+		return errors.New("insufficient stock")
+	}
+	// Server-side authoritative pricing/details.
+	item.ProductName = product.Name
+	if len(product.Images) > 0 {
+		item.Image = product.Images[0]
+	}
+	item.Price = product.Price
+	item.PriceINR = product.PriceINR
+
 	cart, err := s.cartRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return err
@@ -53,6 +72,16 @@ func (s *cartService) AddItem(ctx context.Context, userID primitive.ObjectID, it
 }
 
 func (s *cartService) UpdateItem(ctx context.Context, userID primitive.ObjectID, productID primitive.ObjectID, size string, quantity int) error {
+	if quantity > 0 {
+		product, err := s.productRepo.GetByID(ctx, productID)
+		if err != nil {
+			return errors.New("product not found")
+		}
+		if product.Stock[size] < quantity {
+			return errors.New("insufficient stock")
+		}
+	}
+
 	cart, err := s.cartRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return err

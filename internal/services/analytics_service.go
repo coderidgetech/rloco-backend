@@ -75,9 +75,51 @@ func (s *analyticsService) GetOrderAnalytics(ctx context.Context, startDate, end
 }
 
 func (s *analyticsService) GetProductAnalytics(ctx context.Context, startDate, endDate time.Time) ([]map[string]interface{}, error) {
-	// This would require aggregating order items
-	// For now, return empty
-	return []map[string]interface{}{}, nil
+	orders, _, err := s.orderRepo.List(ctx, bson.M{
+		"created_at": bson.M{
+			"$gte": startDate,
+			"$lte": endDate,
+		},
+	}, 5000, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	type productStat struct {
+		revenue  float64
+		quantity int
+		orders   map[string]bool
+	}
+	stats := map[primitive.ObjectID]*productStat{}
+
+	for _, order := range orders {
+		for _, item := range order.Items {
+			s, ok := stats[item.ProductID]
+			if !ok {
+				s = &productStat{orders: map[string]bool{}}
+				stats[item.ProductID] = s
+			}
+			s.quantity += item.Quantity
+			s.revenue += item.Price * float64(item.Quantity)
+			s.orders[order.ID.Hex()] = true
+		}
+	}
+
+	result := make([]map[string]interface{}, 0, len(stats))
+	for productID, stat := range stats {
+		name := productID.Hex()
+		if product, err := s.productRepo.GetByID(ctx, productID); err == nil {
+			name = product.Name
+		}
+		result = append(result, map[string]interface{}{
+			"product_id":    productID.Hex(),
+			"product_name":  name,
+			"units_sold":    stat.quantity,
+			"orders_count":  len(stat.orders),
+			"gross_revenue": stat.revenue,
+		})
+	}
+	return result, nil
 }
 
 func (s *analyticsService) GetCustomerAnalytics(ctx context.Context, startDate, endDate time.Time) (map[string]interface{}, error) {

@@ -91,10 +91,10 @@ func main() {
 	configService := services.NewConfigService(configRepo)
 	storageService := services.NewStorageService(cfg.StorageType, cfg.StorageEndpoint, cfg.StorageAccessKey, cfg.StorageSecretKey, cfg.StorageBucket, cfg.StoragePublicURL)
 	reviewService := services.NewReviewService(reviewRepo, productRepo)
-	returnService := services.NewReturnService(returnRepo, orderRepo, productRepo, emailService)
 	inventoryService := services.NewInventoryService(productRepo)
 	supportService := services.NewSupportService(supportRepo)
-	paymentService := services.NewPaymentService(paymentRepo, orderRepo, emailService, cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.PayPalClientID, cfg.PayPalSecret, cfg.PayPalMode)
+	paymentService := services.NewPaymentService(paymentRepo, orderRepo, emailService, cfg.StripeSecretKey, cfg.StripeWebhookSecret)
+	returnService := services.NewReturnService(returnRepo, orderRepo, productRepo, paymentRepo, paymentService, emailService)
 	videoService := services.NewVideoService(videoRepo)
 	addressService := services.NewAddressService(addressRepo)
 
@@ -360,7 +360,7 @@ func main() {
 		admin := api.Group("/admin")
 		admin.Use(middleware.AuthRequired())
 		admin.Use(middleware.LoadUserMiddleware(userRepo))
-		admin.Use(middleware.RequireRole("admin", "vendor"))
+		admin.Use(middleware.RequireRole("admin"))
 		{
 			// Dashboard
 			admin.GET("/dashboard/stats", adminHandler.GetDashboardStats)

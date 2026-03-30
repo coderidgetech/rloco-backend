@@ -17,11 +17,11 @@ import (
 )
 
 type PaymentService interface {
-	CreatePaymentIntent(ctx context.Context, orderID primitive.ObjectID, amount float64, currency, gateway, paymentMethod string) (*PaymentIntent, error)
-	ProcessPayment(ctx context.Context, paymentIntentID, paymentMethodID string, gateway string) error
+	CreatePaymentIntent(ctx context.Context, requesterID primitive.ObjectID, requesterRole string, orderID primitive.ObjectID, amount float64, currency, gateway, paymentMethod string) (*PaymentIntent, error)
+	ProcessPayment(ctx context.Context, requesterID primitive.ObjectID, requesterRole, paymentIntentID, paymentMethodID, gateway string) error
 	HandleWebhook(ctx context.Context, gateway string, payload []byte, signature string) error
 	RefundPayment(ctx context.Context, transactionID primitive.ObjectID, amount *float64) error
-	GetTransaction(ctx context.Context, id primitive.ObjectID) (*models.PaymentTransaction, error)
+	GetTransaction(ctx context.Context, requesterID primitive.ObjectID, requesterRole string, id primitive.ObjectID) (*models.PaymentTransaction, error)
 }
 
 type PaymentIntent struct {
@@ -40,29 +40,26 @@ type paymentService struct {
 	emailService        EmailService
 	stripeKey           string
 	stripeWebhookSecret string
-	paypalClientID      string
-	paypalSecret        string
-	paypalMode          string // "sandbox" or "live"
 }
 
-func NewPaymentService(paymentRepo repositories.PaymentRepository, orderRepo repositories.OrderRepository, emailService EmailService, stripeKey, stripeWebhookSecret, paypalClientID, paypalSecret, paypalMode string) PaymentService {
+func NewPaymentService(paymentRepo repositories.PaymentRepository, orderRepo repositories.OrderRepository, emailService EmailService, stripeKey, stripeWebhookSecret string) PaymentService {
 	return &paymentService{
 		paymentRepo:         paymentRepo,
 		orderRepo:           orderRepo,
 		emailService:        emailService,
 		stripeKey:           stripeKey,
 		stripeWebhookSecret: stripeWebhookSecret,
-		paypalClientID:      paypalClientID,
-		paypalSecret:        paypalSecret,
-		paypalMode:          paypalMode,
 	}
 }
 
-func (s *paymentService) CreatePaymentIntent(ctx context.Context, orderID primitive.ObjectID, amount float64, currency, gateway, paymentMethod string) (*PaymentIntent, error) {
+func (s *paymentService) CreatePaymentIntent(ctx context.Context, requesterID primitive.ObjectID, requesterRole string, orderID primitive.ObjectID, amount float64, currency, gateway, paymentMethod string) (*PaymentIntent, error) {
 	// Verify order exists
 	order, err := s.orderRepo.GetByID(ctx, orderID)
 	if err != nil {
 		return nil, errors.New("order not found")
+	}
+	if requesterRole != "admin" && order.UserID != requesterID {
+		return nil, errors.New("access denied")
 	}
 	if expected, ok := expectedCurrencyByCountry(order.ShippingInfo.Country); ok {
 		incoming := strings.ToLower(strings.TrimSpace(currency))
@@ -94,8 +91,6 @@ func (s *paymentService) CreatePaymentIntent(ctx context.Context, orderID primit
 	switch gateway {
 	case "stripe":
 		return s.createStripePaymentIntent(ctx, transaction, amount, currency, paymentMethod)
-	case "paypal":
-		return s.createPayPalPayment(ctx, transaction, amount, currency)
 	default:
 		return nil, errors.New("unsupported payment gateway")
 	}
@@ -151,19 +146,14 @@ func (s *paymentService) createStripePaymentIntent(ctx context.Context, transact
 	}, nil
 }
 
-func (s *paymentService) createPayPalPayment(ctx context.Context, transaction *models.PaymentTransaction, amount float64, currency string) (*PaymentIntent, error) {
-	if s.paypalClientID == "" || s.paypalSecret == "" {
-		return nil, errors.New("PayPal is not configured: set PAYPAL_CLIENT_ID and PAYPAL_SECRET")
-	}
-	// TODO: Integrate PayPal Go SDK and create real payment; until then reject
-	return nil, errors.New("PayPal integration is not yet implemented; use Stripe or Cash on Delivery")
-}
-
-func (s *paymentService) ProcessPayment(ctx context.Context, paymentIntentID, paymentMethodID string, gateway string) error {
+func (s *paymentService) ProcessPayment(ctx context.Context, requesterID primitive.ObjectID, requesterRole, paymentIntentID, paymentMethodID, gateway string) error {
 	// Find transaction by gateway transaction ID
 	transaction, err := s.paymentRepo.GetByGatewayTransactionID(ctx, paymentIntentID)
 	if err != nil {
 		return errors.New("payment transaction not found")
+	}
+	if requesterRole != "admin" && transaction.UserID != requesterID {
+		return errors.New("access denied")
 	}
 
 	// Process payment based on gateway
@@ -190,9 +180,6 @@ func (s *paymentService) ProcessPayment(ctx context.Context, paymentIntentID, pa
 		s.orderRepo.UpdateStatus(ctx, transaction.OrderID, "processing")
 		return nil
 
-	case "paypal":
-		return errors.New("PayPal is not yet implemented; use Stripe or Cash on Delivery")
-
 	default:
 		return errors.New("unsupported payment gateway")
 	}
@@ -202,8 +189,6 @@ func (s *paymentService) HandleWebhook(ctx context.Context, gateway string, payl
 	switch gateway {
 	case "stripe":
 		return s.handleStripeWebhook(ctx, payload, signature)
-	case "paypal":
-		return s.handlePayPalWebhook(ctx, payload, signature)
 	default:
 		return errors.New("unsupported payment gateway")
 	}
@@ -249,10 +234,6 @@ func (s *paymentService) handleStripeWebhook(ctx context.Context, payload []byte
 	return nil
 }
 
-func (s *paymentService) handlePayPalWebhook(ctx context.Context, payload []byte, signature string) error {
-	return errors.New("PayPal webhooks are not yet implemented")
-}
-
 func (s *paymentService) RefundPayment(ctx context.Context, transactionID primitive.ObjectID, amount *float64) error {
 	transaction, err := s.paymentRepo.GetByID(ctx, transactionID)
 	if err != nil {
@@ -287,16 +268,20 @@ func (s *paymentService) RefundPayment(ctx context.Context, transactionID primit
 		s.paymentRepo.UpdateStatus(ctx, transactionID, "refunded", nil)
 		return nil
 
-	case "paypal":
-		return errors.New("PayPal refunds are not yet implemented")
-
 	default:
 		return errors.New("unsupported payment gateway")
 	}
 }
 
-func (s *paymentService) GetTransaction(ctx context.Context, id primitive.ObjectID) (*models.PaymentTransaction, error) {
-	return s.paymentRepo.GetByID(ctx, id)
+func (s *paymentService) GetTransaction(ctx context.Context, requesterID primitive.ObjectID, requesterRole string, id primitive.ObjectID) (*models.PaymentTransaction, error) {
+	transaction, err := s.paymentRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if requesterRole != "admin" && transaction.UserID != requesterID {
+		return nil, errors.New("access denied")
+	}
+	return transaction, nil
 }
 
 func expectedCurrencyByCountry(country string) (string, bool) {

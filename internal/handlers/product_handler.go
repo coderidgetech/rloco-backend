@@ -144,6 +144,9 @@ func (h *ProductHandler) List(c *gin.Context) {
 			filter["max_price"] = price
 		}
 	}
+	if m := c.Query("market"); m == "IN" || m == "US" {
+		filter["market"] = m
+	}
 
 	products, total, err := h.productService.List(c.Request.Context(), filter, limit, skip, sort)
 	if err != nil {
@@ -172,7 +175,26 @@ func (h *ProductHandler) Get(c *gin.Context) {
 		return
 	}
 
+	if m := c.Query("market"); m == "IN" || m == "US" {
+		if !productVisibleInMarket(product, m) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+			return
+		}
+	}
+
 	c.JSON(http.StatusOK, product)
+}
+
+func productVisibleInMarket(p *models.Product, market string) bool {
+	if len(p.AvailableMarkets) == 0 {
+		return true
+	}
+	for _, m := range p.AvailableMarkets {
+		if m == market {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *ProductHandler) Create(c *gin.Context) {
@@ -183,6 +205,7 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		OriginalPrice    *float64       `json:"original_price,omitempty"`
 		PriceINR         *float64       `json:"price_inr,omitempty"`
 		OriginalPriceINR *float64       `json:"original_price_inr,omitempty"`
+		AvailableMarkets []string       `json:"available_markets"`
 		Images           []string       `json:"images"`
 		Category         string         `json:"category" binding:"required"`
 		Subcategory      string         `json:"subcategory"`
@@ -230,6 +253,11 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		Stock:            product.Stock,
 		Rating:           0,
 		Reviews:          0,
+	}
+	if len(product.AvailableMarkets) > 0 {
+		productModel.AvailableMarkets = product.AvailableMarkets
+	} else {
+		productModel.AvailableMarkets = []string{"IN", "US"}
 	}
 
 	// Set vendor_id if user is a vendor (not admin)
@@ -373,6 +401,19 @@ func (h *ProductHandler) Update(c *gin.Context) {
 	if originalPrice, ok := updates["original_price"].(float64); ok {
 		existingProduct.OriginalPrice = &originalPrice
 	}
+	if raw, ok := updates["available_markets"]; ok {
+		if arr, ok := raw.([]interface{}); ok {
+			strs := make([]string, 0, len(arr))
+			for _, v := range arr {
+				if s, ok := v.(string); ok && (s == "IN" || s == "US") {
+					strs = append(strs, s)
+				}
+			}
+			if len(strs) > 0 {
+				existingProduct.AvailableMarkets = strs
+			}
+		}
+	}
 
 	// Ensure vendor_id cannot be changed by vendors
 	role, exists := c.Get("role")
@@ -417,7 +458,8 @@ func (h *ProductHandler) GetFeatured(c *gin.Context) {
 	if limit < 1 {
 		limit = 10
 	}
-	products, err := h.productService.GetFeatured(c.Request.Context(), limit)
+	market := c.Query("market")
+	products, err := h.productService.GetFeatured(c.Request.Context(), limit, market)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -433,7 +475,8 @@ func (h *ProductHandler) GetNewArrivals(c *gin.Context) {
 	if limit < 1 {
 		limit = 10
 	}
-	products, err := h.productService.GetNewArrivals(c.Request.Context(), limit)
+	market := c.Query("market")
+	products, err := h.productService.GetNewArrivals(c.Request.Context(), limit, market)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -453,7 +496,8 @@ func (h *ProductHandler) GetOnSale(c *gin.Context) {
 	if limit < 1 {
 		limit = 10
 	}
-	products, err := h.productService.GetOnSale(c.Request.Context(), limit)
+	market := c.Query("market")
+	products, err := h.productService.GetOnSale(c.Request.Context(), limit, market)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

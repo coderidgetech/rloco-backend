@@ -5,12 +5,12 @@ WORKDIR /app
 # Install build dependencies
 RUN apk add --no-cache git
 
-# Copy go mod files
-COPY go.mod go.sum ./
+# Copy go.mod first (go.sum optional in some deploy contexts)
+COPY go.mod ./
 RUN go mod download
 
-# Copy source code into /app
-COPY . /app
+# Full source (includes go.sum when present)
+COPY . .
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o server ./cmd/server

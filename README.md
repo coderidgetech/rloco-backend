@@ -10,7 +10,7 @@ A robust Go-based backend API for the R-Loko e-commerce platform, built with Gin
 - **Role-Based Access Control** (Customer, Admin, Vendor)
 - **Product Management** with image uploads
 - **Order Processing** with inventory management
-- **Payment Integration** (Stripe & PayPal)
+- **Payment Integration** (Stripe)
 - **Email Notifications** via SMTP
 - **Returns & Refunds** management
 - **Customer Support** ticket system
@@ -97,12 +97,9 @@ SMTP_PASSWORD=your-app-password
 SMTP_FROM=noreply@rloco.com
 SMTP_FROM_NAME=R-Loko
 
-# Payment Gateways (optional)
+# Payment (optional)
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
-PAYPAL_CLIENT_ID=...
-PAYPAL_SECRET=...
-PAYPAL_MODE=sandbox
 ```
 
 ## API Endpoints

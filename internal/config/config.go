@@ -33,9 +33,6 @@ type Config struct {
 	AdminEmail          string // optional; new order alerts sent here
 	StripeSecretKey     string
 	StripeWebhookSecret string
-	PayPalClientID      string
-	PayPalSecret        string
-	PayPalMode          string
 	GoogleClientID      string
 	ShippoAPIKey        string
 	ShippoBaseURL       string
@@ -116,9 +113,6 @@ func Load() (*Config, error) {
 		AdminEmail:          getEnv("ADMIN_EMAIL", ""),
 		StripeSecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
-		PayPalClientID:      getEnv("PAYPAL_CLIENT_ID", ""),
-		PayPalSecret:        getEnv("PAYPAL_SECRET", ""),
-		PayPalMode:          getEnv("PAYPAL_MODE", "sandbox"),
 		GoogleClientID:      getEnv("GOOGLE_CLIENT_ID", ""),
 		ShippoAPIKey:        getEnv("SHIPPO_API_KEY", ""),
 		ShippoBaseURL:       getEnv("SHIPPO_BASE_URL", "https://api.goshippo.com"),

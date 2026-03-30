@@ -51,14 +51,48 @@ func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo reposi
 }
 
 func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64) (*models.Order, error) {
+	// Never persist card-like data in orders; keep only non-sensitive payment hints.
+	safePaymentInfo := models.PaymentInfo{
+		UPIID:      paymentInfo.UPIID,
+		WalletName: paymentInfo.WalletName,
+	}
+
 	if _, ok := normalizeSupportedCountry(shippingInfo.Country); !ok {
 		return nil, errors.New("unsupported shipping country: only India and United States are allowed")
 	}
+	orderMarket := orderMarketFromShippingCountry(shippingInfo.Country)
 
-	// Calculate subtotal
+	// Reprice and validate all incoming items from authoritative product catalog.
+	validatedItems := make([]models.OrderItem, 0, len(items))
 	var subtotal float64
 	for _, item := range items {
-		subtotal += item.Price * float64(item.Quantity)
+		if item.Quantity <= 0 {
+			return nil, errors.New("invalid quantity")
+		}
+		product, err := s.productRepo.GetByID(ctx, item.ProductID)
+		if err != nil {
+			return nil, errors.New("product not found")
+		}
+		if !productOrderableInMarket(product, orderMarket) {
+			return nil, fmt.Errorf("product %s is not available for this shipping region", product.Name)
+		}
+		stockQty := product.Stock[item.Size]
+		if stockQty < item.Quantity {
+			return nil, fmt.Errorf("insufficient stock for product %s size %s", product.Name, item.Size)
+		}
+		price := product.Price
+		if orderMarket == "IN" && product.PriceINR != nil {
+			price = *product.PriceINR
+		}
+		sanitized := item
+		sanitized.ProductName = product.Name
+		sanitized.Image = ""
+		if len(product.Images) > 0 {
+			sanitized.Image = product.Images[0]
+		}
+		sanitized.Price = price
+		validatedItems = append(validatedItems, sanitized)
+		subtotal += price * float64(item.Quantity)
 	}
 
 	// Apply promotion if provided
@@ -135,9 +169,9 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	order := &models.Order{
 		OrderNumber:        orderNumber,
 		UserID:             userID,
-		Items:              items,
+		Items:              validatedItems,
 		ShippingInfo:       shippingInfo,
-		PaymentInfo:        paymentInfo,
+		PaymentInfo:        safePaymentInfo,
 		Subtotal:           subtotal,
 		Discount:           discount,
 		ShippingCost:       shippingCost,
@@ -153,11 +187,14 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	}
 
 	// Validate and atomically update stock to prevent race conditions
-	for _, item := range items {
+	for _, item := range validatedItems {
 		// First verify product exists
 		product, err := s.productRepo.GetByID(ctx, item.ProductID)
 		if err != nil {
 			return nil, errors.New("product not found")
+		}
+		if !productOrderableInMarket(product, orderMarket) {
+			return nil, fmt.Errorf("product %s is not available for this shipping region", product.Name)
 		}
 
 		// Atomically update stock - this prevents overselling
@@ -203,6 +240,36 @@ func normalizeSupportedCountry(input string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func orderMarketFromShippingCountry(country string) string {
+	norm, ok := normalizeSupportedCountry(country)
+	if !ok {
+		return ""
+	}
+	switch norm {
+	case "India":
+		return "IN"
+	case "United States":
+		return "US"
+	default:
+		return ""
+	}
+}
+
+func productOrderableInMarket(p *models.Product, market string) bool {
+	if market == "" {
+		return true
+	}
+	if len(p.AvailableMarkets) == 0 {
+		return true
+	}
+	for _, m := range p.AvailableMarkets {
+		if m == market {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeShippingCostUSD(amount float64, currency string) float64 {

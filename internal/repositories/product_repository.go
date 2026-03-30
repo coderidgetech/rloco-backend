@@ -19,10 +19,10 @@ type ProductRepository interface {
 	Update(ctx context.Context, id primitive.ObjectID, product *models.Product) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	List(ctx context.Context, filter bson.M, limit, skip int, sort bson.M) ([]*models.Product, int64, error)
-	GetFeatured(ctx context.Context, limit int) ([]*models.Product, error)
-	GetNewArrivals(ctx context.Context, limit int) ([]*models.Product, error)
-	GetOnSale(ctx context.Context, limit int) ([]*models.Product, error)
-	Search(ctx context.Context, query string, limit, skip int) ([]*models.Product, int64, error)
+	GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error)
+	GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error)
+	GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error)
+	Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error)
 	// AtomicStockUpdate atomically decrements stock if available
 	AtomicStockUpdate(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error
 }
@@ -35,6 +35,23 @@ func NewProductRepository(db *MongoDB) ProductRepository {
 	return &productRepository{
 		collection: db.GetCollection("products"),
 	}
+}
+
+// MergeMarketFilter ANDs base with catalog market visibility when market is IN or US.
+// Products with missing or empty available_markets remain visible in all markets until backfilled.
+func MergeMarketFilter(base bson.M, market string) bson.M {
+	if market != "IN" && market != "US" {
+		return base
+	}
+	mf := bson.M{"$or": []bson.M{
+		{"available_markets": market},
+		{"available_markets": bson.M{"$exists": false}},
+		{"available_markets": bson.M{"$size": 0}},
+	}}
+	if len(base) == 0 {
+		return mf
+	}
+	return bson.M{"$and": []bson.M{base, mf}}
 }
 
 func (r *productRepository) Create(ctx context.Context, product *models.Product) error {
@@ -84,8 +101,9 @@ func (r *productRepository) Update(ctx context.Context, id primitive.ObjectID, p
 		"video_url":          product.VideoURL,
 		"stock":              product.Stock,
 		"rating":             product.Rating,
-		"reviews":            product.Reviews,
-		"updated_at":         product.UpdatedAt,
+		"reviews":             product.Reviews,
+		"available_markets":   product.AvailableMarkets,
+		"updated_at":          product.UpdatedAt,
 	}
 	
 	// Only include vendor_id if it's set
@@ -131,10 +149,11 @@ func (r *productRepository) List(ctx context.Context, filter bson.M, limit, skip
 	return products, total, nil
 }
 
-func (r *productRepository) GetFeatured(ctx context.Context, limit int) ([]*models.Product, error) {
+func (r *productRepository) GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error) {
+	filter := MergeMarketFilter(bson.M{"featured": true}, market)
 	cursor, err := r.collection.Find(
 		ctx,
-		bson.M{"featured": true},
+		filter,
 		options.Find().SetLimit(int64(limit)).SetSort(bson.M{"created_at": -1}),
 	)
 	if err != nil {
@@ -149,10 +168,11 @@ func (r *productRepository) GetFeatured(ctx context.Context, limit int) ([]*mode
 	return products, nil
 }
 
-func (r *productRepository) GetNewArrivals(ctx context.Context, limit int) ([]*models.Product, error) {
+func (r *productRepository) GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error) {
+	filter := MergeMarketFilter(bson.M{"new_arrival": true}, market)
 	cursor, err := r.collection.Find(
 		ctx,
-		bson.M{"new_arrival": true},
+		filter,
 		options.Find().SetLimit(int64(limit)).SetSort(bson.M{"created_at": -1}),
 	)
 	if err != nil {
@@ -167,10 +187,11 @@ func (r *productRepository) GetNewArrivals(ctx context.Context, limit int) ([]*m
 	return products, nil
 }
 
-func (r *productRepository) GetOnSale(ctx context.Context, limit int) ([]*models.Product, error) {
+func (r *productRepository) GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error) {
+	filter := MergeMarketFilter(bson.M{"on_sale": true}, market)
 	cursor, err := r.collection.Find(
 		ctx,
-		bson.M{"on_sale": true},
+		filter,
 		options.Find().SetLimit(int64(limit)).SetSort(bson.M{"created_at": -1}),
 	)
 	if err != nil {
@@ -185,7 +206,7 @@ func (r *productRepository) GetOnSale(ctx context.Context, limit int) ([]*models
 	return products, nil
 }
 
-func (r *productRepository) Search(ctx context.Context, query string, limit, skip int) ([]*models.Product, int64, error) {
+func (r *productRepository) Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error) {
 	filter := bson.M{
 		"$or": []bson.M{
 			{"name": bson.M{"$regex": query, "$options": "i"}},
@@ -193,6 +214,7 @@ func (r *productRepository) Search(ctx context.Context, query string, limit, ski
 			{"category": bson.M{"$regex": query, "$options": "i"}},
 		},
 	}
+	filter = MergeMarketFilter(filter, market)
 
 	return r.List(ctx, filter, limit, skip, bson.M{"created_at": -1})
 }

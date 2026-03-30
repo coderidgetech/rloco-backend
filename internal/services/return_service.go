@@ -24,18 +24,22 @@ type ReturnService interface {
 }
 
 type returnService struct {
-	returnRepo  repositories.ReturnRepository
-	orderRepo   repositories.OrderRepository
-	productRepo repositories.ProductRepository
-	emailService EmailService
+	returnRepo     repositories.ReturnRepository
+	orderRepo      repositories.OrderRepository
+	productRepo    repositories.ProductRepository
+	paymentRepo    repositories.PaymentRepository
+	paymentService PaymentService
+	emailService   EmailService
 }
 
-func NewReturnService(returnRepo repositories.ReturnRepository, orderRepo repositories.OrderRepository, productRepo repositories.ProductRepository, emailService EmailService) ReturnService {
+func NewReturnService(returnRepo repositories.ReturnRepository, orderRepo repositories.OrderRepository, productRepo repositories.ProductRepository, paymentRepo repositories.PaymentRepository, paymentService PaymentService, emailService EmailService) ReturnService {
 	return &returnService{
-		returnRepo:   returnRepo,
-		orderRepo:    orderRepo,
-		productRepo:  productRepo,
-		emailService: emailService,
+		returnRepo:     returnRepo,
+		orderRepo:      orderRepo,
+		productRepo:    productRepo,
+		paymentRepo:    paymentRepo,
+		paymentService: paymentService,
+		emailService:   emailService,
 	}
 }
 
@@ -172,6 +176,15 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 
 	if returnReq.Status != "approved" {
 		return errors.New("return request must be approved before processing refund")
+	}
+
+	// Execute gateway refund for original payment, if available.
+	transaction, txErr := s.paymentRepo.GetByOrderID(ctx, returnReq.OrderID)
+	if txErr == nil && transaction != nil {
+		amount := returnReq.RefundAmount
+		if err := s.paymentService.RefundPayment(ctx, transaction.ID, &amount); err != nil {
+			return fmt.Errorf("gateway refund failed: %w", err)
+		}
 	}
 
 	// Update refund method and status
