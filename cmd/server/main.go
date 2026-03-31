@@ -86,7 +86,7 @@ func main() {
 	cartService := services.NewCartService(cartRepo, productRepo)
 	wishlistService := services.NewWishlistService(wishlistRepo, productRepo)
 	promotionService := services.NewPromotionService(promotionRepo)
-	vendorService := services.NewVendorService(vendorRepo, userRepo)
+	vendorService := services.NewVendorService(vendorRepo, userRepo, emailService, cfg.AppBaseURL)
 	analyticsService := services.NewAnalyticsService(analyticsRepo, orderRepo, productRepo)
 	configService := services.NewConfigService(configRepo)
 	storageService := services.NewStorageService(cfg.StorageType, cfg.StorageEndpoint, cfg.StorageAccessKey, cfg.StorageSecretKey, cfg.StorageBucket, cfg.StoragePublicURL)

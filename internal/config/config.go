@@ -76,7 +76,8 @@ func (c *Config) EmailConfigReady() bool {
 	return strings.TrimSpace(c.SMTPHost) != "" &&
 		strings.TrimSpace(c.SMTPPort) != "" &&
 		strings.TrimSpace(c.SMTPUser) != "" &&
-		strings.TrimSpace(c.SMTPPassword) != ""
+		strings.TrimSpace(c.SMTPPassword) != "" &&
+		strings.TrimSpace(c.SMTPFrom) != ""
 }
 
 func Load() (*Config, error) {

@@ -2,14 +2,30 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/crypto/bcrypt"
 	"rloco-backend/internal/models"
 	"rloco-backend/internal/repositories"
 )
 
+// VendorCreateResult is returned when an admin creates a vendor with a portal login.
+type VendorCreateResult struct {
+	Vendor                 *models.Vendor `json:"vendor"`
+	TemporaryPassword      string         `json:"temporary_password,omitempty"`
+	CredentialsEmailSent   bool           `json:"credentials_email_sent"`
+	CredentialsEmailError  string         `json:"credentials_email_error,omitempty"`
+	LoginURL               string         `json:"login_url"`
+}
+
 type VendorService interface {
-	Create(ctx context.Context, vendor *models.Vendor) error
+	Create(ctx context.Context, vendor *models.Vendor, initialPassword string) (*VendorCreateResult, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*models.Vendor, error)
 	Update(ctx context.Context, id primitive.ObjectID, vendor *models.Vendor) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
@@ -18,19 +34,118 @@ type VendorService interface {
 }
 
 type vendorService struct {
-	vendorRepo repositories.VendorRepository
-	userRepo   repositories.UserRepository
+	vendorRepo    repositories.VendorRepository
+	userRepo      repositories.UserRepository
+	emailService  EmailService
+	appBaseURL    string
 }
 
-func NewVendorService(vendorRepo repositories.VendorRepository, userRepo repositories.UserRepository) VendorService {
+func NewVendorService(
+	vendorRepo repositories.VendorRepository,
+	userRepo repositories.UserRepository,
+	emailService EmailService,
+	appBaseURL string,
+) VendorService {
 	return &vendorService{
-		vendorRepo: vendorRepo,
-		userRepo:   userRepo,
+		vendorRepo:   vendorRepo,
+		userRepo:     userRepo,
+		emailService: emailService,
+		appBaseURL:   strings.TrimSuffix(strings.TrimSpace(appBaseURL), "/"),
 	}
 }
 
-func (s *vendorService) Create(ctx context.Context, vendor *models.Vendor) error {
-	return s.vendorRepo.Create(ctx, vendor)
+func generateTemporaryPassword() (string, error) {
+	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = chars[int(b[i])%len(chars)]
+	}
+	return string(b), nil
+}
+
+func (s *vendorService) Create(ctx context.Context, vendor *models.Vendor, initialPassword string) (*VendorCreateResult, error) {
+	vendor.Email = strings.TrimSpace(strings.ToLower(vendor.Email))
+	vendor.Name = strings.TrimSpace(vendor.Name)
+	if vendor.Email == "" || !strings.Contains(vendor.Email, "@") {
+		return nil, errors.New("valid vendor email is required")
+	}
+	if vendor.Name == "" {
+		return nil, errors.New("vendor name is required")
+	}
+
+	if _, err := s.userRepo.GetByEmail(ctx, vendor.Email); err == nil {
+		return nil, fmt.Errorf("a user with email %s already exists", vendor.Email)
+	} else if !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, err
+	}
+
+	if initialPassword != "" && len(initialPassword) < 8 {
+		return nil, errors.New("initial password must be at least 8 characters")
+	}
+
+	if vendor.Status == "" {
+		vendor.Status = "active"
+	}
+
+	if err := s.vendorRepo.Create(ctx, vendor); err != nil {
+		return nil, err
+	}
+
+	plain := initialPassword
+	if plain == "" {
+		var err error
+		plain, err = generateTemporaryPassword()
+		if err != nil {
+			_ = s.vendorRepo.Delete(ctx, vendor.ID)
+			return nil, err
+		}
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	if err != nil {
+		_ = s.vendorRepo.Delete(ctx, vendor.ID)
+		return nil, err
+	}
+
+	vendorID := vendor.ID
+	user := &models.User{
+		Email:         vendor.Email,
+		PasswordHash:  string(hashed),
+		Name:          vendor.Name,
+		Role:          "vendor",
+		VendorID:      &vendorID,
+		Active:        true,
+		EmailVerified: false,
+	}
+
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		_ = s.vendorRepo.Delete(ctx, vendor.ID)
+		return nil, err
+	}
+
+	loginURL := s.appBaseURL + "/admin/login"
+	result := &VendorCreateResult{
+		Vendor:               vendor,
+		LoginURL:             loginURL,
+		CredentialsEmailSent: false,
+	}
+
+	if s.emailService != nil && s.emailService.Configured() {
+		if err := s.emailService.SendVendorPortalCredentials(vendor.Email, vendor.Name, loginURL, plain); err != nil {
+			log.Printf("[Vendor] portal credentials email failed for %s: %v", vendor.Email, err)
+			result.CredentialsEmailError = err.Error()
+			result.TemporaryPassword = plain
+			return result, nil
+		}
+		result.CredentialsEmailSent = true
+		return result, nil
+	}
+
+	result.TemporaryPassword = plain
+	return result, nil
 }
 
 func (s *vendorService) GetByID(ctx context.Context, id primitive.ObjectID) (*models.Vendor, error) {
@@ -42,6 +157,9 @@ func (s *vendorService) Update(ctx context.Context, id primitive.ObjectID, vendo
 }
 
 func (s *vendorService) Delete(ctx context.Context, id primitive.ObjectID) error {
+	if u, err := s.userRepo.GetByVendorID(ctx, id); err == nil && u != nil {
+		_ = s.userRepo.Delete(ctx, u.ID)
+	}
 	return s.vendorRepo.Delete(ctx, id)
 }
 
@@ -57,4 +175,3 @@ func (s *vendorService) UpdatePermissions(ctx context.Context, id primitive.Obje
 	vendor.Permissions = permissions
 	return s.vendorRepo.Update(ctx, id, vendor)
 }
-

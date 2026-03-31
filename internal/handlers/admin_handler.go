@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -276,18 +277,26 @@ func (h *AdminHandler) GetVendor(c *gin.Context) {
 }
 
 func (h *AdminHandler) CreateVendor(c *gin.Context) {
-	var vendor models.Vendor
-	if err := c.ShouldBindJSON(&vendor); err != nil {
+	var req struct {
+		models.Vendor
+		InitialPassword string `json:"initial_password,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.vendorService.Create(c.Request.Context(), &vendor); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	result, err := h.vendorService.Create(c.Request.Context(), &req.Vendor, req.InitialPassword)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "already exists") {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusCreated, vendor)
+	c.JSON(http.StatusCreated, result)
 }
 
 func (h *AdminHandler) UpdateVendor(c *gin.Context) {

@@ -16,6 +16,7 @@ type UserRepository interface {
 	Create(ctx context.Context, user *models.User) error
 	GetByID(ctx context.Context, id primitive.ObjectID) (*models.User, error)
 	GetByEmail(ctx context.Context, email string) (*models.User, error)
+	GetByVendorID(ctx context.Context, vendorID primitive.ObjectID) (*models.User, error)
 	GetByPhoneKey(ctx context.Context, phoneKey string) (*models.User, error)
 	Update(ctx context.Context, id primitive.ObjectID, user *models.User) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
@@ -53,6 +54,15 @@ func (r *userRepository) GetByID(ctx context.Context, id primitive.ObjectID) (*m
 func (r *userRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
 	err := r.collection.FindOne(ctx, bson.M{"email": email}).Decode(&user)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) GetByVendorID(ctx context.Context, vendorID primitive.ObjectID) (*models.User, error) {
+	var user models.User
+	err := r.collection.FindOne(ctx, bson.M{"vendor_id": vendorID}).Decode(&user)
 	if err != nil {
 		return nil, err
 	}
