@@ -1,0 +1,14 @@
+meta {
+  name: Dashboard products
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/admin/dashboard/products
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

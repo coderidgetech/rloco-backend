@@ -1,0 +1,20 @@
+meta {
+  name: Add wishlist item
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/wishlist/items
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"product_id":"{{productId}}"}
+}

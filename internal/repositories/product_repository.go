@@ -210,8 +210,11 @@ func (r *productRepository) Search(ctx context.Context, query string, limit, ski
 	filter := bson.M{
 		"$or": []bson.M{
 			{"name": bson.M{"$regex": query, "$options": "i"}},
+			{"sku": bson.M{"$regex": query, "$options": "i"}},
 			{"description": bson.M{"$regex": query, "$options": "i"}},
 			{"category": bson.M{"$regex": query, "$options": "i"}},
+			{"subcategory": bson.M{"$regex": query, "$options": "i"}},
+			{"material": bson.M{"$regex": query, "$options": "i"}},
 		},
 	}
 	filter = MergeMarketFilter(filter, market)

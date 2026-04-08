@@ -1,0 +1,14 @@
+meta {
+  name: Delete account
+  type: http
+  seq: 10
+}
+
+delete {
+  url: {{baseUrl}}/api/auth/me
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

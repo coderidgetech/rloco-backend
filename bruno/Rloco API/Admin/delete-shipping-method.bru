@@ -1,0 +1,14 @@
+meta {
+  name: Delete shipping method
+  type: http
+  seq: 39
+}
+
+delete {
+  url: {{baseUrl}}/api/admin/shipping/methods/{{shippingMethodId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

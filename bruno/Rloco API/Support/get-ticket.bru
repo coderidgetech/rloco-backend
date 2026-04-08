@@ -1,0 +1,14 @@
+meta {
+  name: Get ticket
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/support/tickets/{{ticketId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

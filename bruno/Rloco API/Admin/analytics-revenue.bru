@@ -1,0 +1,14 @@
+meta {
+  name: Analytics revenue
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/api/admin/analytics/revenue
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

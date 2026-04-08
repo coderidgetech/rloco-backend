@@ -1,0 +1,20 @@
+meta {
+  name: Update customer
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/api/admin/customers/{{customerId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"email":"customer@example.com","name":"Customer Name","role":"customer","avatar":"","active":true,"email_verified":true}
+}

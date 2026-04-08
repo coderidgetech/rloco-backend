@@ -1,0 +1,20 @@
+meta {
+  name: Reject return
+  type: http
+  seq: 34
+}
+
+put {
+  url: {{baseUrl}}/api/admin/returns/{{returnId}}/reject
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"reason":"Outside return window"}
+}

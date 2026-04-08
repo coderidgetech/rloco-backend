@@ -1,0 +1,14 @@
+meta {
+  name: Remove wishlist item
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{baseUrl}}/api/wishlist/items/{{wishlistItemId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

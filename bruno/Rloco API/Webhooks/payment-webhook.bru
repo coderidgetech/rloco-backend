@@ -1,0 +1,20 @@
+meta {
+  name: Payment webhook
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/webhooks/{{gateway}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Stripe-Signature: paste_signature_from_stripe_cli
+}
+
+body:json {
+  {"id":"evt_example","object":"event","type":"payment_intent.succeeded","data":{"object":{"id":"pi_example","object":"payment_intent","status":"succeeded"}}}
+}

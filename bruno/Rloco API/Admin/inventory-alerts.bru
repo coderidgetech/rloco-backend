@@ -1,0 +1,14 @@
+meta {
+  name: Inventory alerts
+  type: http
+  seq: 45
+}
+
+get {
+  url: {{baseUrl}}/api/admin/inventory/alerts
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

@@ -1,0 +1,14 @@
+meta {
+  name: Set default address
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{baseUrl}}/api/addresses/{{addressId}}/default
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

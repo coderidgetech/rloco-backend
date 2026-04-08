@@ -1,0 +1,19 @@
+meta {
+  name: Google sign-in
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/api/auth/google
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"id_token":"PASTE_GOOGLE_ID_TOKEN_JWT"}
+}

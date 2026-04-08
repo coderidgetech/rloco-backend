@@ -1,0 +1,14 @@
+meta {
+  name: Analytics products
+  type: http
+  seq: 20
+}
+
+get {
+  url: {{baseUrl}}/api/admin/analytics/products
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

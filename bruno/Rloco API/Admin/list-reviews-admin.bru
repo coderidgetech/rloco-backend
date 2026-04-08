@@ -1,0 +1,14 @@
+meta {
+  name: List reviews (admin)
+  type: http
+  seq: 29
+}
+
+get {
+  url: {{baseUrl}}/api/admin/reviews
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

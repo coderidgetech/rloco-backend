@@ -1,0 +1,19 @@
+meta {
+  name: Calculate shipping
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/shipping/calculate
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"country":"US","state":"NY","city":"New York","address":"123 Main St","postal_code":"10001","first_name":"Jane","last_name":"Doe","email":"jane@example.com","phone":"+15551234567","subtotal":150.0,"weight":1.2}
+}

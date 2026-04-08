@@ -1,0 +1,19 @@
+meta {
+  name: Unsubscribe
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/newsletter/unsubscribe
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"email":"news@example.com"}
+}

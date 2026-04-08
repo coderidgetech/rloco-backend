@@ -1,0 +1,14 @@
+meta {
+  name: Dashboard orders
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/admin/dashboard/orders
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

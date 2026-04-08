@@ -1,0 +1,20 @@
+meta {
+  name: Create category
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/categories
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Dresses","slug":"dresses","gender":"women","subcategories":["Mini","Midi"],"image":"https://example.com/cat.jpg","order":1}
+}

@@ -1,0 +1,20 @@
+meta {
+  name: Create product
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/api/products
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Silk Dress","sku":"DRS-001","price":249.99,"images":["https://example.com/1.jpg"],"category":"women","subcategory":"dresses","gender":"women","colors":["Black","Navy"],"sizes":["S","M","L"],"description":"Elegant silk dress.","details":["Lined","Dry clean only"],"material":"100% silk","care":"Dry clean","featured":false,"new_arrival":true,"on_sale":false,"is_gift":true,"rating":0,"reviews":0,"stock":{"S":3,"M":5,"L":2},"available_markets":["US","IN"]}
+}

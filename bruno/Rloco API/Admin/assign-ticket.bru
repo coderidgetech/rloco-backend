@@ -1,0 +1,20 @@
+meta {
+  name: Assign ticket
+  type: http
+  seq: 48
+}
+
+put {
+  url: {{baseUrl}}/api/admin/support/tickets/{{ticketId}}/assign
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"assigned_to":"{{customerId}}"}
+}

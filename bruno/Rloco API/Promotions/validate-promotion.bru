@@ -1,0 +1,19 @@
+meta {
+  name: Validate promotion
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/promotions/validate
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"code":"SAVE10","subtotal":199.99}
+}

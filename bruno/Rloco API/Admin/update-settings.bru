@@ -1,0 +1,20 @@
+meta {
+  name: Update settings
+  type: http
+  seq: 26
+}
+
+put {
+  url: {{baseUrl}}/api/admin/settings
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"general":{"siteName":"Rloco Store","tagline":"Luxury fashion"}}
+}

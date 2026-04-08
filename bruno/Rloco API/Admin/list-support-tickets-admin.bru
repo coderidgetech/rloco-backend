@@ -1,0 +1,14 @@
+meta {
+  name: List support tickets (admin)
+  type: http
+  seq: 46
+}
+
+get {
+  url: {{baseUrl}}/api/admin/support/tickets
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

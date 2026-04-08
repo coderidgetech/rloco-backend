@@ -1,0 +1,14 @@
+meta {
+  name: Wishlist product analytics
+  type: http
+  seq: 49
+}
+
+get {
+  url: {{baseUrl}}/api/admin/wishlist/analytics
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

@@ -1,0 +1,20 @@
+meta {
+  name: Update product
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/api/products/{{productId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Updated name","price":199.99,"featured":true,"stock":{"S":2,"M":4}}
+}

@@ -1,0 +1,19 @@
+meta {
+  name: Subscribe
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/newsletter/subscribe
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"email":"news@example.com","name":"Subscriber"}
+}

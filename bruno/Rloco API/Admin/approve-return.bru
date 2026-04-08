@@ -1,0 +1,14 @@
+meta {
+  name: Approve return
+  type: http
+  seq: 33
+}
+
+put {
+  url: {{baseUrl}}/api/admin/returns/{{returnId}}/approve
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

@@ -1,0 +1,14 @@
+meta {
+  name: Get order
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/orders/{{orderId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

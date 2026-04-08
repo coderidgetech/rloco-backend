@@ -1,0 +1,14 @@
+meta {
+  name: Delete tax rate
+  type: http
+  seq: 43
+}
+
+delete {
+  url: {{baseUrl}}/api/admin/tax/rates/{{taxRateId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

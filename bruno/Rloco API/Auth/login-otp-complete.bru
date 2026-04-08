@@ -1,0 +1,19 @@
+meta {
+  name: Login OTP complete
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/auth/login-otp/complete
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"phone":"+15551234567","code":"123456"}
+}

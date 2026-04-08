@@ -1,0 +1,20 @@
+meta {
+  name: Process return refund
+  type: http
+  seq: 35
+}
+
+put {
+  url: {{baseUrl}}/api/admin/returns/{{returnId}}/process-refund
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"refund_method":"original_payment"}
+}

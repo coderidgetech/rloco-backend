@@ -1,0 +1,20 @@
+meta {
+  name: Update address
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/api/addresses/{{addressId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Jane Doe","type":"HOME","address_line":"123 Main Street","address_line2":"Apt 4","city":"New York","state":"NY","pincode":"10001","mobile":"+15551234567","country":"US","is_default":true}
+}

@@ -1,0 +1,14 @@
+meta {
+  name: List tax rates
+  type: http
+  seq: 40
+}
+
+get {
+  url: {{baseUrl}}/api/admin/tax/rates
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

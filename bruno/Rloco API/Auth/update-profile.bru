@@ -1,0 +1,20 @@
+meta {
+  name: Update profile
+  type: http
+  seq: 16
+}
+
+put {
+  url: {{baseUrl}}/api/auth/profile
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Jane Doe","phone":"+15551234567","email":"jane@example.com","birthday":"1990-01-15"}
+}

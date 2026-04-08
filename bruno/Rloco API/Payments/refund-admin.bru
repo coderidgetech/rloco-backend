@@ -1,0 +1,20 @@
+meta {
+  name: Refund (admin)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/payments/refund/{{transactionId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"amount":25.5}
+}

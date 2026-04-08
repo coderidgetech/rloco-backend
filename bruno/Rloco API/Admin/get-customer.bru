@@ -1,0 +1,14 @@
+meta {
+  name: Get customer
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/admin/customers/{{customerId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

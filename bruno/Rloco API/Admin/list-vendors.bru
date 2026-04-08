@@ -1,0 +1,14 @@
+meta {
+  name: List vendors
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/api/admin/vendors
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

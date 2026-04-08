@@ -1,0 +1,14 @@
+meta {
+  name: My reviews
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/reviews/me
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

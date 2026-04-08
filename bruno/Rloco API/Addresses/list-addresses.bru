@@ -1,0 +1,14 @@
+meta {
+  name: List addresses
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/addresses
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

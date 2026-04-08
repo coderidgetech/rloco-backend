@@ -1,0 +1,19 @@
+meta {
+  name: Register OTP complete
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/auth/register-otp/complete
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"phone":"+15551234567","code":"123456","email":"user@example.com","password":"secret12","name":"Jane Doe"}
+}

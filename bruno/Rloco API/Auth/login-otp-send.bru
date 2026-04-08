@@ -1,0 +1,19 @@
+meta {
+  name: Login OTP send
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/auth/login-otp/send
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"phone":"+15551234567"}
+}

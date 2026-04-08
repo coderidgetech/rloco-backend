@@ -1,0 +1,10 @@
+meta {
+  name: Mark review helpful
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/api/products/{{productId}}/reviews/{{reviewId}}/helpful
+  auth: none
+}

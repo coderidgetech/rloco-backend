@@ -1,0 +1,20 @@
+meta {
+  name: Create payment intent
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/payments/intent
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"order_id":"{{orderId}}","amount":99.99,"currency":"usd","gateway":"stripe","payment_method":"card"}
+}

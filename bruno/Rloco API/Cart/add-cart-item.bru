@@ -1,0 +1,20 @@
+meta {
+  name: Add cart item
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/cart/items
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"product_id":"{{productId}}","product_name":"Example product","image":"https://example.com/image.jpg","price":99.99,"size":"M","quantity":1,"is_gift":false}
+}

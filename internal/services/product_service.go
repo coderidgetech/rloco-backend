@@ -78,6 +78,10 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 			bsonFilter["$or"] = []bson.M{
 				{"name": bson.M{"$regex": re}},
 				{"sku": bson.M{"$regex": re}},
+				{"category": bson.M{"$regex": re}},
+				{"subcategory": bson.M{"$regex": re}},
+				{"description": bson.M{"$regex": re}},
+				{"material": bson.M{"$regex": re}},
 			}
 		}
 		if minPrice, ok := filter["min_price"].(float64); ok {

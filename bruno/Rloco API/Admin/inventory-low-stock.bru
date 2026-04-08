@@ -1,0 +1,14 @@
+meta {
+  name: Inventory low stock
+  type: http
+  seq: 44
+}
+
+get {
+  url: {{baseUrl}}/api/admin/inventory/low-stock
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

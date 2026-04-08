@@ -1,0 +1,14 @@
+meta {
+  name: Analytics orders
+  type: http
+  seq: 19
+}
+
+get {
+  url: {{baseUrl}}/api/admin/analytics/orders
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

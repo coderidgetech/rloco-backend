@@ -1,0 +1,10 @@
+meta {
+  name: Get product by id
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/api/products/{{productId}}
+  auth: none
+}

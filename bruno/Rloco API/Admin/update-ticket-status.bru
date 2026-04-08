@@ -1,0 +1,20 @@
+meta {
+  name: Update ticket status
+  type: http
+  seq: 47
+}
+
+put {
+  url: {{baseUrl}}/api/admin/support/tickets/{{ticketId}}/status
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"status":"resolved"}
+}

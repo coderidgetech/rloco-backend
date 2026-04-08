@@ -1,0 +1,20 @@
+meta {
+  name: Create tax rate
+  type: http
+  seq: 41
+}
+
+post {
+  url: {{baseUrl}}/api/admin/tax/rates
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"country":"US","state":"CA","rate":8.25,"tax_type":"sales_tax","is_active":true}
+}

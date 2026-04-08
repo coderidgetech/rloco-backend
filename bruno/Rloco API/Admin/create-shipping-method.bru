@@ -1,0 +1,20 @@
+meta {
+  name: Create shipping method
+  type: http
+  seq: 37
+}
+
+post {
+  url: {{baseUrl}}/api/admin/shipping/methods
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Standard US","carrier":"custom","type":"standard","base_cost":5.99,"currency":"usd","estimated_days":5,"zones":[{"countries":["US"],"cost":5.99,"estimated_days":5}],"is_active":true}
+}

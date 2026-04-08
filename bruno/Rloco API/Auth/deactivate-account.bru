@@ -1,0 +1,14 @@
+meta {
+  name: Deactivate account
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{baseUrl}}/api/auth/deactivate
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

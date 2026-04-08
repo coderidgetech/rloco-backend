@@ -1,0 +1,10 @@
+meta {
+  name: List product reviews
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/products/{{productId}}/reviews
+  auth: none
+}

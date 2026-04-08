@@ -1,0 +1,20 @@
+meta {
+  name: Update gift options
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/api/cart/gift-options
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"product_id":"{{productId}}","size":"M","gift_wrap_color":"gold","gift_message":"Happy birthday"}
+}

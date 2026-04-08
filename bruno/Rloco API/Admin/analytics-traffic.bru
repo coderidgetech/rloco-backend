@@ -1,0 +1,14 @@
+meta {
+  name: Analytics traffic
+  type: http
+  seq: 22
+}
+
+get {
+  url: {{baseUrl}}/api/admin/analytics/traffic
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

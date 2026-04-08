@@ -1,0 +1,14 @@
+meta {
+  name: Delete video
+  type: http
+  seq: 53
+}
+
+delete {
+  url: {{baseUrl}}/api/admin/videos/{{videoId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

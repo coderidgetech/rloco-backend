@@ -1,0 +1,14 @@
+meta {
+  name: Dashboard sales
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/admin/dashboard/sales
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

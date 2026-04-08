@@ -1,0 +1,14 @@
+meta {
+  name: Get configuration
+  type: http
+  seq: 27
+}
+
+get {
+  url: {{baseUrl}}/api/admin/configuration
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

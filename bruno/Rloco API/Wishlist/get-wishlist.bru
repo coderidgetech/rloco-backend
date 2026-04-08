@@ -1,0 +1,14 @@
+meta {
+  name: Get wishlist
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/wishlist
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

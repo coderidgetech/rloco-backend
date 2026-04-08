@@ -1,0 +1,14 @@
+meta {
+  name: List shipping methods
+  type: http
+  seq: 36
+}
+
+get {
+  url: {{baseUrl}}/api/admin/shipping/methods
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

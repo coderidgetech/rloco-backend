@@ -1,0 +1,20 @@
+meta {
+  name: Process payment
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/payments/process
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"payment_intent_id":"pi_xxx","payment_method_id":"pm_xxx","gateway":"stripe"}
+}

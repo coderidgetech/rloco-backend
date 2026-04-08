@@ -1,0 +1,14 @@
+meta {
+  name: Get return
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/returns/{{returnId}}
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

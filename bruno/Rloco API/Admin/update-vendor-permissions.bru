@@ -1,0 +1,20 @@
+meta {
+  name: Update vendor permissions
+  type: http
+  seq: 13
+}
+
+put {
+  url: {{baseUrl}}/api/admin/vendors/{{vendorId}}/permissions
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"permissions":{"can_manage_inventory":true}}
+}

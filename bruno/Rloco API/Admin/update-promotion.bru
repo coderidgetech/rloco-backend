@@ -1,0 +1,20 @@
+meta {
+  name: Update promotion
+  type: http
+  seq: 16
+}
+
+put {
+  url: {{baseUrl}}/api/admin/promotions/{{promotionId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {"name":"Summer Sale","code":"SUMMER20","type":"percentage","value":20,"min_purchase":100,"max_discount":50,"start_date":"2026-06-01T00:00:00Z","end_date":"2026-08-31T23:59:59Z","usage_limit":500,"is_active":true}
+}

@@ -1,0 +1,14 @@
+meta {
+  name: List admin promotions
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/api/admin/promotions
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

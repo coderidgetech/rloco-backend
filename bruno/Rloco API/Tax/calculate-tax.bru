@@ -1,0 +1,19 @@
+meta {
+  name: Calculate tax
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/tax/calculate
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {"country":"US","state":"CA","city":"Los Angeles","postal_code":"90001","subtotal":100.0}
+}
