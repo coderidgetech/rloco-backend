@@ -25,6 +25,8 @@ type ProductRepository interface {
 	Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error)
 	// AtomicStockUpdate atomically decrements stock if available
 	AtomicStockUpdate(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error
+	// AtomicStockIncrement restores stock (e.g. order cancellation)
+	AtomicStockIncrement(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error
 }
 
 type productRepository struct {
@@ -243,4 +245,17 @@ func (r *productRepository) AtomicStockUpdate(ctx context.Context, productID pri
 	return nil
 }
 
-
+func (r *productRepository) AtomicStockIncrement(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error {
+	if quantity <= 0 {
+		return nil
+	}
+	_, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": productID},
+		bson.M{
+			"$inc": bson.M{fmt.Sprintf("stock.%s", size): quantity},
+			"$set": bson.M{"updated_at": time.Now()},
+		},
+	)
+	return err
+}

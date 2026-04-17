@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -236,8 +237,29 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 }
 
 func (h *AuthHandler) Refresh(c *gin.Context) {
-	// Implement token refresh logic
-	c.JSON(http.StatusOK, gin.H{"message": "Token refresh not implemented"})
+	var tokenString string
+	if cookieToken, err := c.Cookie("auth_token"); err == nil && cookieToken != "" {
+		tokenString = cookieToken
+	} else if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+		parts := strings.Split(authHeader, " ")
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			tokenString = parts[1]
+		}
+	}
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization required"})
+		return
+	}
+	user, token, err := h.authService.RefreshSession(c.Request.Context(), tokenString)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	h.setAuthCookie(c, token)
+	c.JSON(http.StatusOK, gin.H{
+		"user":  user,
+		"token": token,
+	})
 }
 
 func (h *AuthHandler) ForgotPassword(c *gin.Context) {

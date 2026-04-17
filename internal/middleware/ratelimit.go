@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -25,20 +24,26 @@ type visitor struct {
 var limiter *rateLimiter
 
 func init() {
-	// Check environment - be more lenient in development
-	env := os.Getenv("ENV")
-	rate := 1000 // Default: 1000 requests per minute (very lenient)
-	if env == "production" {
-		rate = 100 // Production: 100 requests per minute
-	}
-	
 	limiter = &rateLimiter{
 		visitors: make(map[string]*visitor),
-		rate:     rate,
-		window:   1 * time.Minute, // 1 minute window
+		rate:     1000, // development default; aligned from main via ConfigureRateLimit
+		window:   1 * time.Minute,
 	}
-	// Clean up old visitors every 5 minutes
 	go limiter.cleanup()
+}
+
+// ConfigureRateLimit sets per-IP RPM from the same ENV as config (not raw os.Getenv in init).
+func ConfigureRateLimit(isProduction bool) {
+	if limiter == nil {
+		return
+	}
+	limiter.mu.Lock()
+	if isProduction {
+		limiter.rate = 100
+	} else {
+		limiter.rate = 1000
+	}
+	limiter.mu.Unlock()
 }
 
 func (rl *rateLimiter) cleanup() {

@@ -18,6 +18,7 @@ type ReviewService interface {
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
 	IncrementHelpful(ctx context.Context, id primitive.ObjectID) error
 	RecalculateProductRating(ctx context.Context, productID primitive.ObjectID) error
+	ListByStatus(ctx context.Context, status string, limit, skip int) ([]*models.ProductReview, int64, error)
 }
 
 type reviewService struct {
@@ -32,7 +33,7 @@ func NewReviewService(reviewRepo repositories.ReviewRepository, productRepo repo
 	}
 }
 
-func (s *reviewService) Create(ctx context.Context, productID, userID primitive.ObjectID, userName string, rating int, title, comment string, images []string, verified bool) (*models.ProductReview, error) {
+func (s *reviewService) Create(ctx context.Context, productID, userID primitive.ObjectID, userName string, rating int, title, comment string, images []string, _verifiedIgnored bool) (*models.ProductReview, error) {
 	// Validate rating
 	if rating < 1 || rating > 5 {
 		return nil, errors.New("rating must be between 1 and 5")
@@ -62,7 +63,7 @@ func (s *reviewService) Create(ctx context.Context, productID, userID primitive.
 		Title:     title,
 		Comment:   comment,
 		Images:    images,
-		Verified:  verified,
+		Verified:  false, // set only server-side when tied to a verified purchase
 		Helpful:   0,
 		Status:    "pending",
 	}
@@ -174,4 +175,8 @@ func (s *reviewService) RecalculateProductRating(ctx context.Context, productID 
 	product.Reviews = count
 
 	return s.productRepo.Update(ctx, productID, product)
+}
+
+func (s *reviewService) ListByStatus(ctx context.Context, status string, limit, skip int) ([]*models.ProductReview, int64, error) {
+	return s.reviewRepo.ListByStatus(ctx, status, limit, skip)
 }

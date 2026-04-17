@@ -816,8 +816,25 @@ func (h *AdminHandler) UpdateConfiguration(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Configuration updated successfully"})
 }
 
-// GetPublicConfig returns public site configuration (customer-facing data only)
-// Uses the same logic as GetConfiguration but is public (no auth required)
+// filterPublicSiteConfig strips admin-only keys (e.g. SMTP) from stored site config.
+func filterPublicSiteConfig(src map[string]interface{}) map[string]interface{} {
+	if src == nil {
+		return map[string]interface{}{}
+	}
+	allowed := map[string]bool{
+		"general": true, "design": true, "homepage": true, "navigation": true,
+		"categories": true, "footer": true, "localization": true, "pages": true,
+		"seo": true, "social": true, "marketing": true, "analytics": true,
+	}
+	out := make(map[string]interface{})
+	for k, v := range src {
+		if allowed[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // GetPublicConfig returns public site configuration (customer-facing data only)
 // Uses the same logic as GetConfiguration but is public (no auth required)
 func (h *AdminHandler) GetPublicConfig(c *gin.Context) {
@@ -826,14 +843,11 @@ func (h *AdminHandler) GetPublicConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Return the config map directly, same as GetConfiguration
-	// Frontend expects: {"general": {...}, "categories": {...}, ...}
 	if siteConfig.Config == nil || len(siteConfig.Config) == 0 {
-		// Return default config if database is empty
-		c.JSON(http.StatusOK, getDefaultConfig())
+		c.JSON(http.StatusOK, filterPublicSiteConfig(getDefaultConfig()))
 		return
 	}
-	c.JSON(http.StatusOK, siteConfig.Config)
+	c.JSON(http.StatusOK, filterPublicSiteConfig(siteConfig.Config))
 }
 
 func (h *AdminHandler) GetPublicContent(c *gin.Context) {

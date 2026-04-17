@@ -95,8 +95,9 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		subtotal += price * float64(item.Quantity)
 	}
 
-	// Apply promotion if provided
+	// Apply promotion if provided (usage incremented only after order persists)
 	var discount float64
+	var appliedPromotionID *primitive.ObjectID
 	if promotionCode != nil && *promotionCode != "" {
 		promotion, err := s.promotionRepo.GetByCode(ctx, *promotionCode)
 		if err == nil && promotion.IsActive {
@@ -111,8 +112,8 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 					} else if promotion.Type == "fixed" {
 						discount = promotion.Value
 					}
-					// Increment usage
-					s.promotionRepo.IncrementUsage(ctx, promotion.ID)
+					pid := promotion.ID
+					appliedPromotionID = &pid
 				}
 			}
 		}
@@ -207,15 +208,12 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		return nil, err
 	}
 
-	// Update payment status based on payment method
-	if paymentMethod == "cod" {
-		order.PaymentStatus = "pending"
-	} else {
-		// For card/upi/wallet, assume payment is processed
-		order.PaymentStatus = "paid"
-		order.Status = "processing"
-		s.orderRepo.Update(ctx, order.ID, order)
+	if appliedPromotionID != nil {
+		_ = s.promotionRepo.IncrementUsage(ctx, *appliedPromotionID)
 	}
+
+	// Non-COD: order stays status=pending, payment_status=pending until Stripe webhook or /payments/process.
+	// COD: same defaults; ops may mark paid on delivery via admin flows.
 
 	// Send order confirmation email (async)
 	go func() {
@@ -350,7 +348,13 @@ func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID
 		return errors.New("shipped orders cannot be cancelled. Please request a return instead")
 	}
 
-	// Update order status
+	// Restore inventory when cancelling before fulfillment (stock was reserved at order create)
+	if order.Status == "pending" || order.Status == "processing" {
+		for _, item := range order.Items {
+			_ = s.productRepo.AtomicStockIncrement(ctx, item.ProductID, item.Size, item.Quantity)
+		}
+	}
+
 	if err := s.orderRepo.UpdateStatus(ctx, id, "cancelled"); err != nil {
 		return err
 	}

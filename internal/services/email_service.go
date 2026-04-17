@@ -22,6 +22,7 @@ type EmailService interface {
 	SendPaymentReceived(to, orderNumber string, amount float64, currency string) error
 	SendNewOrderAlert(orderNumber, totalDisplay, customerEmail string) error
 	SendVendorPortalCredentials(to, vendorName, loginURL, temporaryPassword string) error
+	SendContactInquiry(name, fromEmail, phone, subject, message string) error
 }
 
 type emailService struct {
@@ -335,4 +336,29 @@ func (s *emailService) SendVendorPortalCredentials(to, vendorName, loginURL, tem
 		emailMutedNote("Never share this email. R-Loko staff will never ask for your password by phone or message.")
 	return s.sendEmail(to, "Your R-Loko vendor portal is ready",
 		rlokoEmailShell("Vendor portal — R-Loko", "Your vendor portal is ready", body))
+}
+
+func (s *emailService) SendContactInquiry(name, fromEmail, phone, subject, message string) error {
+	if !s.Configured() {
+		return errors.New("smtp not configured")
+	}
+	to := strings.TrimSpace(s.adminEmail)
+	if to == "" {
+		to = strings.TrimSpace(s.fromEmail)
+	}
+	if to == "" {
+		return errors.New("no recipient for contact inquiries (set ADMIN_EMAIL or SMTP_FROM)")
+	}
+	n := html.EscapeString(name)
+	fe := html.EscapeString(fromEmail)
+	ph := html.EscapeString(phone)
+	sub := html.EscapeString(subject)
+	msg := html.EscapeString(message)
+	body := fmt.Sprintf(`<p style="margin:0 0 12px;font-size:15px;line-height:1.65;color:#2c2825;"><strong>From:</strong> %s &lt;%s&gt;</p>
+<p style="margin:0 0 12px;font-size:15px;line-height:1.65;color:#2c2825;"><strong>Phone:</strong> %s</p>
+<p style="margin:0 0 12px;font-size:15px;line-height:1.65;color:#2c2825;"><strong>Subject:</strong> %s</p>
+<p style="margin:0;font-size:15px;line-height:1.65;color:#2c2825;"><strong>Message:</strong></p>
+<p style="margin:12px 0 0;font-size:15px;line-height:1.65;color:#2c2825;white-space:pre-wrap;">%s</p>`, n, fe, ph, sub, msg)
+	return s.sendEmail(to, fmt.Sprintf("[R-Loko Contact] %s", subject),
+		rlokoEmailShell("Website contact form", "New inquiry", emailTextBlockRow(body)))
 }

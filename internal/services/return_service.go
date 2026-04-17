@@ -60,12 +60,33 @@ func (s *returnService) Create(ctx context.Context, orderID, userID primitive.Ob
 		return nil, errors.New("cancelled orders cannot be returned")
 	}
 
-	// Calculate refund amount
+	// Calculate refund amount; validate return quantities do not exceed ordered quantities
+	type lineKey struct {
+		pid  primitive.ObjectID
+		size string
+	}
+	orderedQty := make(map[lineKey]int)
+	for _, oi := range order.Items {
+		orderedQty[lineKey{oi.ProductID, oi.Size}] += oi.Quantity
+	}
+	returnedSoFar := make(map[lineKey]int)
+
 	var refundAmount float64
 	for _, returnItem := range items {
-		// Find matching order item
+		if returnItem.Quantity <= 0 {
+			return nil, errors.New("invalid return quantity")
+		}
+		k := lineKey{returnItem.ProductID, returnItem.Size}
+		maxQ := orderedQty[k]
+		if maxQ == 0 {
+			return nil, errors.New("return item does not match order line")
+		}
+		returnedSoFar[k] += returnItem.Quantity
+		if returnedSoFar[k] > maxQ {
+			return nil, fmt.Errorf("return quantity exceeds ordered quantity for product line")
+		}
 		for _, orderItem := range order.Items {
-			if orderItem.ProductID.Hex() == returnItem.ProductID.Hex() && orderItem.Size == returnItem.Size {
+			if orderItem.ProductID == returnItem.ProductID && orderItem.Size == returnItem.Size {
 				refundAmount += orderItem.Price * float64(returnItem.Quantity)
 				break
 			}
@@ -73,6 +94,9 @@ func (s *returnService) Create(ctx context.Context, orderID, userID primitive.Ob
 	}
 
 	// Apply proportional discount and tax
+	if order.Subtotal <= 0 {
+		return nil, errors.New("order subtotal invalid for refund calculation")
+	}
 	proportionalDiscount := (refundAmount / order.Subtotal) * order.Discount
 	proportionalTax := (refundAmount / order.Subtotal) * order.Tax
 	refundAmount = refundAmount - proportionalDiscount + proportionalTax
@@ -178,9 +202,20 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 		return errors.New("return request must be approved before processing refund")
 	}
 
-	// Execute gateway refund for original payment, if available.
-	transaction, txErr := s.paymentRepo.GetByOrderID(ctx, returnReq.OrderID)
-	if txErr == nil && transaction != nil {
+	orderForRefund, oerr := s.orderRepo.GetByID(ctx, returnReq.OrderID)
+	if oerr != nil {
+		return errors.New("order not found for refund")
+	}
+
+	// COD / manual refunds: no card transaction to reverse.
+	if orderForRefund.PaymentMethod != "cod" {
+		transaction, txErr := s.paymentRepo.GetByOrderID(ctx, returnReq.OrderID)
+		if txErr != nil || transaction == nil {
+			return errors.New("no payment transaction found for gateway refund")
+		}
+		if transaction.Status != "success" {
+			return errors.New("payment was not successful; cannot process refund")
+		}
 		amount := returnReq.RefundAmount
 		if err := s.paymentService.RefundPayment(ctx, transaction.ID, &amount); err != nil {
 			return fmt.Errorf("gateway refund failed: %w", err)
@@ -198,11 +233,11 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 
 	// Send refund notification email (async)
 	go func() {
-		returnReq, _ := s.returnRepo.GetByID(ctx, id)
-		if returnReq != nil {
-			order, _ := s.orderRepo.GetByID(ctx, returnReq.OrderID)
-			if order != nil {
-				_ = s.emailService.SendRefundNotification(order.ShippingInfo.Email, returnReq.ID.Hex(), returnReq.RefundAmount)
+		ret, _ := s.returnRepo.GetByID(context.Background(), id)
+		if ret != nil {
+			ord, _ := s.orderRepo.GetByID(context.Background(), ret.OrderID)
+			if ord != nil {
+				_ = s.emailService.SendRefundNotification(ord.ShippingInfo.Email, ret.ID.Hex(), ret.RefundAmount)
 			}
 		}
 	}()

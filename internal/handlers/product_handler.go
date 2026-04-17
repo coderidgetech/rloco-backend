@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"rloco-backend/internal/models"
 	"rloco-backend/internal/services"
@@ -518,6 +520,63 @@ func (h *ProductHandler) UploadImages(c *gin.Context) {
 		return
 	}
 
-	// Implement image upload
-	c.JSON(http.StatusOK, gin.H{"message": "Image upload not fully implemented"})
+	product, err := h.productService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+		return
+	}
+
+	var files []*multipart.FileHeader
+	if mf, err := c.MultipartForm(); err == nil && mf != nil {
+		if v := mf.File["images"]; len(v) > 0 {
+			files = v
+		}
+	}
+	if len(files) == 0 {
+		if fh, err := c.FormFile("file"); err == nil {
+			files = []*multipart.FileHeader{fh}
+		}
+	}
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No images provided (use multipart field \"images\" or \"file\")"})
+		return
+	}
+
+	allowedCT := map[string]bool{
+		"image/jpeg": true, "image/jpg": true, "image/png": true, "image/webp": true, "image/gif": true,
+	}
+	const maxSize = 5 * 1024 * 1024
+	urls := append([]string{}, product.Images...)
+
+	for _, fh := range files {
+		if fh.Size > maxSize {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Each image must be 5MB or smaller"})
+			return
+		}
+		ct := strings.ToLower(strings.TrimSpace(fh.Header.Get("Content-Type")))
+		if !allowedCT[ct] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image type"})
+			return
+		}
+		src, err := fh.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		url, err := h.storageService.Upload(c.Request.Context(), src, fh.Filename, fh.Header.Get("Content-Type"))
+		_ = src.Close()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		urls = append(urls, url)
+	}
+
+	product.Images = urls
+	if err := h.productService.Update(c.Request.Context(), id, product); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Images uploaded", "images": urls})
 }

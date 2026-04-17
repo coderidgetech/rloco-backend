@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,6 +22,8 @@ type ReviewRepository interface {
 	IncrementHelpful(ctx context.Context, id primitive.ObjectID) error
 	GetProductRating(ctx context.Context, productID primitive.ObjectID) (float64, int, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
+	// ListByStatus lists reviews for admin moderation (empty status = all).
+	ListByStatus(ctx context.Context, status string, limit, skip int) ([]*models.ProductReview, int64, error)
 }
 
 type reviewRepository struct {
@@ -177,4 +180,29 @@ func (r *reviewRepository) GetProductRating(ctx context.Context, productID primi
 func (r *reviewRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
 	return err
+}
+
+func (r *reviewRepository) ListByStatus(ctx context.Context, status string, limit, skip int) ([]*models.ProductReview, int64, error) {
+	filter := bson.M{}
+	if strings.TrimSpace(status) != "" {
+		filter["status"] = status
+	}
+	opts := options.Find().
+		SetLimit(int64(limit)).
+		SetSkip(int64(skip)).
+		SetSort(bson.M{"created_at": -1})
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+	reviews := []*models.ProductReview{}
+	if err := cursor.All(ctx, &reviews); err != nil {
+		return nil, 0, err
+	}
+	total, err := r.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	return reviews, total, nil
 }

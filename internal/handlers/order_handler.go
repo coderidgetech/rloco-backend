@@ -4,8 +4,11 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"rloco-backend/internal/models"
+	"rloco-backend/internal/repositories"
 	"rloco-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -15,12 +18,14 @@ import (
 type OrderHandler struct {
 	orderService   services.OrderService
 	productService services.ProductService
+	idempotency    repositories.OrderIdempotencyRepository
 }
 
-func NewOrderHandler(orderService services.OrderService, productService services.ProductService) *OrderHandler {
+func NewOrderHandler(orderService services.OrderService, productService services.ProductService, idempotency repositories.OrderIdempotencyRepository) *OrderHandler {
 	return &OrderHandler{
 		orderService:   orderService,
 		productService: productService,
+		idempotency:    idempotency,
 	}
 }
 
@@ -265,7 +270,24 @@ func (h *OrderHandler) Get(c *gin.Context) {
 			return
 		}
 
-		c.JSON(http.StatusOK, order)
+		// Vendor-scoped view: only their line items; redact customer PII beyond fulfillment basics.
+		filtered := *order
+		var vitems []models.OrderItem
+		for _, item := range order.Items {
+			if productIDMap[item.ProductID] {
+				vitems = append(vitems, item)
+			}
+		}
+		filtered.Items = vitems
+		filtered.ShippingInfo = models.ShippingInfo{
+			FirstName: order.ShippingInfo.FirstName,
+			LastName:  order.ShippingInfo.LastName,
+			City:      order.ShippingInfo.City,
+			State:     order.ShippingInfo.State,
+			Country:   order.ShippingInfo.Country,
+			ZipCode:   order.ShippingInfo.ZipCode,
+		}
+		c.JSON(http.StatusOK, &filtered)
 		return
 	}
 
@@ -277,6 +299,42 @@ func (h *OrderHandler) Create(c *gin.Context) {
 	userIDStr, _ := userID.(string)
 	id, _ := primitive.ObjectIDFromHex(userIDStr)
 
+	idemKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(idemKey) > 256 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Idempotency-Key header must be at most 256 characters"})
+		return
+	}
+
+	if h.idempotency != nil && idemKey != "" {
+		if oid, _ := h.idempotency.LookupOrderID(c.Request.Context(), id, idemKey); oid != nil {
+			order, err := h.orderService.GetByID(c.Request.Context(), *oid)
+			if err == nil {
+				c.JSON(http.StatusOK, order)
+				return
+			}
+		}
+		leased, err := h.idempotency.TryReserve(c.Request.Context(), id, idemKey)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not start checkout"})
+			return
+		}
+		if !leased {
+			for i := 0; i < 50; i++ {
+				if oid, _ := h.idempotency.LookupOrderID(c.Request.Context(), id, idemKey); oid != nil {
+					order, err := h.orderService.GetByID(c.Request.Context(), *oid)
+					if err == nil {
+						c.JSON(http.StatusOK, order)
+						return
+					}
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			c.JSON(http.StatusConflict, gin.H{"error": "Duplicate checkout in progress; try again shortly"})
+			return
+		}
+	}
+
 	var req struct {
 		Items              []models.OrderItem  `json:"items" binding:"required"`
 		ShippingInfo       models.ShippingInfo `json:"shipping_info" binding:"required"`
@@ -287,6 +345,9 @@ func (h *OrderHandler) Create(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if h.idempotency != nil && idemKey != "" {
+			_ = h.idempotency.Release(c.Request.Context(), id, idemKey)
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -297,10 +358,15 @@ func (h *OrderHandler) Create(c *gin.Context) {
 
 	order, err := h.orderService.Create(c.Request.Context(), id, req.Items, req.ShippingInfo, req.PaymentInfo, req.PaymentMethod, req.PromotionCode, req.GiftPackingCharge)
 	if err != nil {
+		if h.idempotency != nil && idemKey != "" {
+			_ = h.idempotency.Release(c.Request.Context(), id, idemKey)
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
+	if h.idempotency != nil && idemKey != "" {
+		_ = h.idempotency.Commit(c.Request.Context(), id, idemKey, order.ID)
+	}
 	c.JSON(http.StatusCreated, order)
 }
 

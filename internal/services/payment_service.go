@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/stripe/stripe-go/v76"
@@ -38,15 +39,23 @@ type paymentService struct {
 	paymentRepo         repositories.PaymentRepository
 	orderRepo           repositories.OrderRepository
 	emailService        EmailService
+	stripeWebhookEvents repositories.StripeWebhookEventRepository // optional
 	stripeKey           string
 	stripeWebhookSecret string
 }
 
-func NewPaymentService(paymentRepo repositories.PaymentRepository, orderRepo repositories.OrderRepository, emailService EmailService, stripeKey, stripeWebhookSecret string) PaymentService {
+func NewPaymentService(
+	paymentRepo repositories.PaymentRepository,
+	orderRepo repositories.OrderRepository,
+	emailService EmailService,
+	stripeWebhookEvents repositories.StripeWebhookEventRepository,
+	stripeKey, stripeWebhookSecret string,
+) PaymentService {
 	return &paymentService{
 		paymentRepo:         paymentRepo,
 		orderRepo:           orderRepo,
 		emailService:        emailService,
+		stripeWebhookEvents: stripeWebhookEvents,
 		stripeKey:           stripeKey,
 		stripeWebhookSecret: stripeWebhookSecret,
 	}
@@ -61,10 +70,57 @@ func (s *paymentService) CreatePaymentIntent(ctx context.Context, requesterID pr
 	if requesterRole != "admin" && order.UserID != requesterID {
 		return nil, errors.New("access denied")
 	}
-	if expected, ok := expectedCurrencyByCountry(order.ShippingInfo.Country); ok {
-		incoming := strings.ToLower(strings.TrimSpace(currency))
-		if incoming != expected {
-			return nil, fmt.Errorf("currency mismatch for shipping country: expected %s", expected)
+	if order.PaymentMethod == "cod" {
+		return nil, errors.New("payment intent not applicable for cash on delivery orders")
+	}
+	if order.PaymentStatus == "paid" {
+		return nil, errors.New("order is already paid")
+	}
+	// Authoritative amount from server order (ignore client-supplied amount to prevent tampering)
+	payAmount := order.Total
+	if payAmount <= 0 {
+		return nil, errors.New("invalid order total for payment")
+	}
+	expectedCurrency, hasExpected := expectedCurrencyByCountry(order.ShippingInfo.Country)
+	currency = strings.ToLower(strings.TrimSpace(currency))
+	if hasExpected {
+		if currency != "" && currency != expectedCurrency {
+			return nil, fmt.Errorf("currency mismatch for shipping country: expected %s", expectedCurrency)
+		}
+		currency = expectedCurrency
+	} else if currency == "" {
+		currency = "usd"
+	}
+	// Optional mismatch warning: tolerate tiny float noise only
+	if amount > 0 && math.Abs(amount-payAmount) > 0.02 {
+		return nil, errors.New("order total has changed; refresh checkout and try again")
+	}
+
+	// Reuse an in-flight Stripe PaymentIntent for this order (double-submit / refresh safe).
+	if gateway == "stripe" && s.stripeKey != "" {
+		if existing, err := s.paymentRepo.GetByOrderID(ctx, orderID); err == nil && existing != nil &&
+			existing.Status == "pending" && strings.HasPrefix(existing.GatewayTransactionID, "pi_") {
+			stripe.Key = s.stripeKey
+			pi, err := paymentintent.Get(existing.GatewayTransactionID, nil)
+			if err == nil {
+				switch pi.Status {
+				case stripe.PaymentIntentStatusRequiresPaymentMethod,
+					stripe.PaymentIntentStatusRequiresConfirmation,
+					stripe.PaymentIntentStatusRequiresAction,
+					stripe.PaymentIntentStatusProcessing:
+					return &PaymentIntent{
+						ID:           pi.ID,
+						ClientSecret: pi.ClientSecret,
+						Gateway:      "stripe",
+						Amount:       payAmount,
+						Currency:     currency,
+						Metadata: map[string]interface{}{
+							"order_id":         orderID.Hex(),
+							"transaction_id": existing.ID.Hex(),
+						},
+					}, nil
+				}
+			}
 		}
 	}
 
@@ -72,7 +128,7 @@ func (s *paymentService) CreatePaymentIntent(ctx context.Context, requesterID pr
 	transaction := &models.PaymentTransaction{
 		OrderID:       orderID,
 		UserID:        order.UserID,
-		Amount:        amount,
+		Amount:        payAmount,
 		Currency:      currency,
 		PaymentMethod: paymentMethod,
 		Gateway:       gateway,
@@ -90,7 +146,7 @@ func (s *paymentService) CreatePaymentIntent(ctx context.Context, requesterID pr
 	// Create payment intent based on gateway
 	switch gateway {
 	case "stripe":
-		return s.createStripePaymentIntent(ctx, transaction, amount, currency, paymentMethod)
+		return s.createStripePaymentIntent(ctx, transaction, payAmount, currency, paymentMethod)
 	default:
 		return nil, errors.New("unsupported payment gateway")
 	}
@@ -101,7 +157,7 @@ func (s *paymentService) createStripePaymentIntent(ctx context.Context, transact
 		return nil, errors.New("Stripe is not configured: set STRIPE_SECRET_KEY")
 	}
 	currency = strings.ToLower(currency)
-	amountCents := int64(amount * 100)
+	amountCents := int64(math.Round(amount * 100))
 	stripe.Key = s.stripeKey
 
 	params := &stripe.PaymentIntentParams{
@@ -126,6 +182,8 @@ func (s *paymentService) createStripePaymentIntent(ctx context.Context, transact
 			Enabled: stripe.Bool(true),
 		}
 	}
+
+	params.IdempotencyKey = stripe.String(fmt.Sprintf("pi-create-%s", transaction.ID.Hex()))
 
 	_ = ctx
 	pi, err := paymentintent.New(params)
@@ -177,12 +235,29 @@ func (s *paymentService) ProcessPayment(ctx context.Context, requesterID primiti
 			return err
 		}
 		s.paymentRepo.UpdateStatus(ctx, transaction.ID, "success", nil)
-		s.orderRepo.UpdateStatus(ctx, transaction.OrderID, "processing")
+		_ = s.markOrderPaidAfterGatewaySuccess(ctx, transaction.OrderID)
 		return nil
 
 	default:
 		return errors.New("unsupported payment gateway")
 	}
+}
+
+// markOrderPaidAfterGatewaySuccess sets order payment_status=paid and status=processing after successful charge.
+func (s *paymentService) markOrderPaidAfterGatewaySuccess(ctx context.Context, orderID primitive.ObjectID) error {
+	order, err := s.orderRepo.GetByID(ctx, orderID)
+	if err != nil {
+		return err
+	}
+	if order.PaymentMethod == "cod" {
+		return nil
+	}
+	if order.PaymentStatus == "paid" {
+		return nil
+	}
+	order.PaymentStatus = "paid"
+	order.Status = "processing"
+	return s.orderRepo.Update(ctx, order.ID, order)
 }
 
 func (s *paymentService) HandleWebhook(ctx context.Context, gateway string, payload []byte, signature string) error {
@@ -194,7 +269,7 @@ func (s *paymentService) HandleWebhook(ctx context.Context, gateway string, payl
 	}
 }
 
-func (s *paymentService) handleStripeWebhook(ctx context.Context, payload []byte, signature string) error {
+func (s *paymentService) handleStripeWebhook(ctx context.Context, payload []byte, signature string) (err error) {
 	if s.stripeWebhookSecret == "" {
 		return errors.New("Stripe webhook is not configured: set STRIPE_WEBHOOK_SECRET")
 	}
@@ -202,33 +277,62 @@ func (s *paymentService) handleStripeWebhook(ctx context.Context, payload []byte
 	if err != nil {
 		return fmt.Errorf("stripe webhook verify: %w", err)
 	}
-	switch event.Type {
-	case "payment_intent.succeeded":
-		var pi stripe.PaymentIntent
-		if err := json.Unmarshal(event.Data.Raw, &pi); err != nil {
-			return err
-		}
-		transaction, err := s.paymentRepo.GetByGatewayTransactionID(ctx, pi.ID)
+	if s.stripeWebhookEvents != nil && event.ID != "" {
+		var inserted bool
+		inserted, err = s.stripeWebhookEvents.TryInsert(ctx, event.ID)
 		if err != nil {
 			return err
 		}
-		s.paymentRepo.UpdateStatus(ctx, transaction.ID, "success", nil)
-		s.orderRepo.UpdateStatus(ctx, transaction.OrderID, "processing")
-		// Notify customer that payment was received
+		if !inserted {
+			return nil
+		}
+		defer func() {
+			if err != nil {
+				_ = s.stripeWebhookEvents.Delete(ctx, event.ID)
+			}
+		}()
+	}
+	switch event.Type {
+	case "payment_intent.succeeded":
+		var pi stripe.PaymentIntent
+		if err = json.Unmarshal(event.Data.Raw, &pi); err != nil {
+			return err
+		}
+		var tx *models.PaymentTransaction
+		tx, err = s.paymentRepo.GetByGatewayTransactionID(ctx, pi.ID)
+		if err != nil {
+			return err
+		}
+		if tx.Status == "success" {
+			return nil
+		}
+		if err = s.paymentRepo.UpdateStatus(ctx, tx.ID, "success", nil); err != nil {
+			return err
+		}
+		if err = s.markOrderPaidAfterGatewaySuccess(ctx, tx.OrderID); err != nil {
+			return err
+		}
+		oid := tx.OrderID
+		amt := tx.Amount
+		cur := tx.Currency
 		go func() {
-			order, err := s.orderRepo.GetByID(context.Background(), transaction.OrderID)
+			order, err := s.orderRepo.GetByID(context.Background(), oid)
 			if err != nil {
 				return
 			}
-			_ = s.emailService.SendPaymentReceived(order.ShippingInfo.Email, order.OrderNumber, transaction.Amount, transaction.Currency)
+			_ = s.emailService.SendPaymentReceived(order.ShippingInfo.Email, order.OrderNumber, amt, cur)
 		}()
 	case "payment_intent.payment_failed":
 		var pi stripe.PaymentIntent
-		_ = json.Unmarshal(event.Data.Raw, &pi)
+		if err = json.Unmarshal(event.Data.Raw, &pi); err != nil {
+			return fmt.Errorf("stripe webhook payment_failed payload: %w", err)
+		}
 		transaction, _ := s.paymentRepo.GetByGatewayTransactionID(ctx, pi.ID)
 		if transaction != nil {
 			reason := "Payment failed"
-			s.paymentRepo.UpdateStatus(ctx, transaction.ID, "failed", &reason)
+			if err = s.paymentRepo.UpdateStatus(ctx, transaction.ID, "failed", &reason); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -248,6 +352,12 @@ func (s *paymentService) RefundPayment(ctx context.Context, transactionID primit
 	if amount != nil {
 		refundAmount = *amount
 	}
+	if refundAmount <= 0 {
+		return errors.New("refund amount must be positive")
+	}
+	if refundAmount > transaction.Amount+1e-6 {
+		return errors.New("refund amount cannot exceed original transaction amount")
+	}
 
 	switch transaction.Gateway {
 	case "stripe":
@@ -260,7 +370,7 @@ func (s *paymentService) RefundPayment(ctx context.Context, transactionID primit
 		}
 		_ = ctx
 		if amount != nil {
-			params.Amount = stripe.Int64(int64(refundAmount * 100))
+			params.Amount = stripe.Int64(int64(math.Round(refundAmount * 100)))
 		}
 		if _, err := refund.New(params); err != nil {
 			return fmt.Errorf("stripe refund: %w", err)

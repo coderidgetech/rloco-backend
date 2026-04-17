@@ -49,11 +49,11 @@ func NewPaymentHandler(paymentService services.PaymentService) *PaymentHandler {
 
 func (h *PaymentHandler) CreatePaymentIntent(c *gin.Context) {
 	var req struct {
-		OrderID        string  `json:"order_id" binding:"required"`
-		Amount         float64 `json:"amount" binding:"required"`
-		Currency       string  `json:"currency" binding:"required"`
-		Gateway        string  `json:"gateway" binding:"required"` // "stripe"
-		PaymentMethod  string  `json:"payment_method"`               // "card", "upi", "wallet" - so Stripe shows correct method (e.g. UPI first for INR)
+		OrderID       string  `json:"order_id" binding:"required"`
+		Amount        float64 `json:"amount"` // optional client hint; server charges order.total
+		Currency      string  `json:"currency" binding:"required"`
+		Gateway       string  `json:"gateway" binding:"required"` // "stripe"
+		PaymentMethod string  `json:"payment_method"`             // "card", "upi", "wallet"
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"rloco-backend/internal/config"
@@ -25,6 +27,9 @@ func main() {
 	}
 	if !cfg.EmailConfigReady() {
 		log.Println("WARNING: Email notifications are disabled. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD (or supported aliases) to enable delivery.")
+	}
+	if cfg.Env == "production" && strings.TrimSpace(cfg.CORSAllowedOrigins) == "" {
+		log.Fatal("CORS_ALLOWED_ORIGINS must be set in production (comma-separated allowed web origins)")
 	}
 
 	// Initialize database
@@ -51,6 +56,8 @@ func main() {
 	taxRepo := repositories.NewTaxRepository(db)
 	supportRepo := repositories.NewSupportRepository(db)
 	paymentRepo := repositories.NewPaymentRepository(db)
+	stripeWebhookEventRepo := repositories.NewStripeWebhookEventRepository(db)
+	orderIdempotencyRepo := repositories.NewOrderIdempotencyRepository(db)
 	videoRepo := repositories.NewVideoRepository(db)
 	addressRepo := repositories.NewAddressRepository(db)
 	passwordResetRepo := repositories.NewPasswordResetRepository(db)
@@ -61,6 +68,8 @@ func main() {
 
 	// Update middleware to use config
 	middleware.SetJWTSecret(cfg.JWTSecret)
+	middleware.ConfigureRateLimit(cfg.Env == "production")
+	middleware.ConfigureErrorResponses(cfg.Env == "production")
 
 	// Initialize services
 	emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.SMTPFromName, cfg.AppBaseURL, cfg.AdminEmail)
@@ -93,7 +102,7 @@ func main() {
 	reviewService := services.NewReviewService(reviewRepo, productRepo)
 	inventoryService := services.NewInventoryService(productRepo)
 	supportService := services.NewSupportService(supportRepo)
-	paymentService := services.NewPaymentService(paymentRepo, orderRepo, emailService, cfg.StripeSecretKey, cfg.StripeWebhookSecret)
+	paymentService := services.NewPaymentService(paymentRepo, orderRepo, emailService, stripeWebhookEventRepo, cfg.StripeSecretKey, cfg.StripeWebhookSecret)
 	returnService := services.NewReturnService(returnRepo, orderRepo, productRepo, paymentRepo, paymentService, emailService)
 	videoService := services.NewVideoService(videoRepo)
 	addressService := services.NewAddressService(addressRepo)
@@ -102,7 +111,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(authService, userRepo)
 	productHandler := handlers.NewProductHandler(productService, storageService)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
-	orderHandler := handlers.NewOrderHandler(orderService, productService)
+	orderHandler := handlers.NewOrderHandler(orderService, productService, orderIdempotencyRepo)
 	cartHandler := handlers.NewCartHandler(cartService)
 	wishlistHandler := handlers.NewWishlistHandler(wishlistService)
 	promotionHandler := handlers.NewPromotionHandler(promotionService)
@@ -126,6 +135,7 @@ func main() {
 	videoHandler := handlers.NewVideoHandler(videoService)
 	addressHandler := handlers.NewAddressHandler(addressService)
 	newsletterHandler := handlers.NewNewsletterHandler(newsletterService)
+	contactHandler := handlers.NewContactHandler(emailService)
 	vendorHandler := handlers.NewVendorHandler(vendorService)
 
 	// Setup router
@@ -150,6 +160,16 @@ func main() {
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	router.GET("/ready", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if err := db.Client.Ping(ctx, nil); err != nil {
+			c.JSON(503, gin.H{"status": "unready", "error": "database"})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ready"})
 	})
 
 	// API routes
@@ -233,6 +253,8 @@ func main() {
 			newsletter.POST("/unsubscribe", newsletterHandler.Unsubscribe)
 		}
 
+		api.POST("/contact", contactHandler.Submit)
+
 		// Orders
 		orders := api.Group("/orders")
 		orders.Use(middleware.AuthRequired())
@@ -240,7 +262,7 @@ func main() {
 		{
 			orders.GET("", orderHandler.List)
 			orders.GET("/:id", orderHandler.Get)
-			orders.POST("", orderHandler.Create)
+			orders.POST("", middleware.CheckoutRateLimit(), orderHandler.Create)
 			orders.GET("/tracking/:orderNumber", orderHandler.Track)
 			orders.GET("/:id/tracking", orderHandler.GetTracking)
 			orders.POST("/:id/cancel", orderHandler.Cancel)
@@ -272,7 +294,7 @@ func main() {
 			reviews.POST("", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.Create)
 			reviews.PUT("/:reviewId", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.Update)
 			reviews.DELETE("/:reviewId", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.Delete)
-			reviews.POST("/:reviewId/helpful", reviewHandler.MarkHelpful)
+			reviews.POST("/:reviewId/helpful", middleware.AuthRequired(), reviewHandler.MarkHelpful)
 		}
 
 		// Support
@@ -305,7 +327,7 @@ func main() {
 		payments.Use(middleware.AuthRequired())
 		payments.Use(middleware.LoadUserMiddleware(userRepo))
 		{
-			payments.POST("/intent", paymentHandler.CreatePaymentIntent)
+			payments.POST("/intent", middleware.CheckoutRateLimit(), paymentHandler.CreatePaymentIntent)
 			payments.POST("/process", paymentHandler.ProcessPayment)
 			payments.GET("/transactions/:id", paymentHandler.GetTransaction)
 			payments.POST("/refund/:id", middleware.RequireRole("admin"), paymentHandler.Refund)
@@ -373,11 +395,11 @@ func main() {
 		admin.Use(middleware.LoadUserMiddleware(userRepo))
 		admin.Use(middleware.RequireRole("admin", "vendor"))
 		{
-			// Dashboard
-			admin.GET("/dashboard/stats", adminHandler.GetDashboardStats)
-			admin.GET("/dashboard/sales", adminHandler.GetDashboardSales)
-			admin.GET("/dashboard/orders", adminHandler.GetDashboardOrders)
-			admin.GET("/dashboard/products", adminHandler.GetDashboardProducts)
+			// Dashboard (admin-only: platform-wide metrics)
+			admin.GET("/dashboard/stats", middleware.RequireRole("admin"), adminHandler.GetDashboardStats)
+			admin.GET("/dashboard/sales", middleware.RequireRole("admin"), adminHandler.GetDashboardSales)
+			admin.GET("/dashboard/orders", middleware.RequireRole("admin"), adminHandler.GetDashboardOrders)
+			admin.GET("/dashboard/products", middleware.RequireRole("admin"), adminHandler.GetDashboardProducts)
 
 			// Customers
 			admin.GET("/customers", middleware.RequireRole("admin"), adminHandler.ListCustomers)
@@ -398,10 +420,10 @@ func main() {
 			admin.PUT("/promotions/:id", middleware.RequireRole("admin"), adminHandler.UpdatePromotion)
 			admin.DELETE("/promotions/:id", middleware.RequireRole("admin"), adminHandler.DeletePromotion)
 
-			// Analytics
-			admin.GET("/analytics/revenue", adminHandler.GetRevenueAnalytics)
-			admin.GET("/analytics/orders", adminHandler.GetOrderAnalytics)
-			admin.GET("/analytics/products", adminHandler.GetProductAnalytics)
+			// Analytics (admin-only)
+			admin.GET("/analytics/revenue", middleware.RequireRole("admin"), adminHandler.GetRevenueAnalytics)
+			admin.GET("/analytics/orders", middleware.RequireRole("admin"), adminHandler.GetOrderAnalytics)
+			admin.GET("/analytics/products", middleware.RequireRole("admin"), adminHandler.GetProductAnalytics)
 			admin.GET("/analytics/customers", middleware.RequireRole("admin"), adminHandler.GetCustomerAnalytics)
 			admin.GET("/analytics/traffic", middleware.RequireRole("admin"), adminHandler.GetTrafficAnalytics)
 
@@ -410,7 +432,7 @@ func main() {
 			admin.PUT("/content", middleware.RequireRole("admin"), adminHandler.UpdateContent)
 
 			// Settings
-			admin.GET("/settings", adminHandler.GetSettings)
+			admin.GET("/settings", middleware.RequireRole("admin"), adminHandler.GetSettings)
 			admin.PUT("/settings", middleware.RequireRole("admin"), adminHandler.UpdateSettings)
 
 			// Configuration
@@ -453,10 +475,10 @@ func main() {
 			admin.GET("/wishlist/analytics", middleware.RequireRole("admin"), wishlistHandler.GetProductAnalytics)
 			admin.GET("/wishlist/analytics/users", middleware.RequireRole("admin"), wishlistHandler.GetUserAnalytics)
 
-			// Videos (admin/vendor management)
-			admin.POST("/videos", videoHandler.Create)
-			admin.PUT("/videos/:id", videoHandler.Update)
-			admin.DELETE("/videos/:id", videoHandler.Delete)
+			// Videos (admin-only management)
+			admin.POST("/videos", middleware.RequireRole("admin"), videoHandler.Create)
+			admin.PUT("/videos/:id", middleware.RequireRole("admin"), videoHandler.Update)
+			admin.DELETE("/videos/:id", middleware.RequireRole("admin"), videoHandler.Delete)
 		}
 	}
 

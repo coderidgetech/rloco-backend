@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -36,6 +37,7 @@ func (s *supportService) CreateTicket(ctx context.Context, userID primitive.Obje
 		"product":  true,
 		"payment":  true,
 		"shipping": true,
+		"return":   true,
 		"other":    true,
 	}
 	if !validCategories[category] {
@@ -68,7 +70,7 @@ func (s *supportService) CreateTicket(ctx context.Context, userID primitive.Obje
 		UserID:    userID,
 		IsAdmin:   false,
 		Message:   message,
-		CreatedAt: ticket.CreatedAt,
+		CreatedAt: time.Now(),
 	}
 	ticket.Messages = append(ticket.Messages, initialMessage)
 

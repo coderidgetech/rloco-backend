@@ -39,6 +39,8 @@ type AuthService interface {
 	RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, password, name string) (*models.User, string, error)
 	SendLoginOTP(ctx context.Context, phoneRaw string) error
 	LoginWithPhoneOTP(ctx context.Context, phoneRaw, otpCode string) (*models.User, string, error)
+	// RefreshSession issues a new JWT when the current one is valid or recently expired (signature must verify).
+	RefreshSession(ctx context.Context, tokenString string) (*models.User, string, error)
 }
 
 type authService struct {
@@ -243,6 +245,65 @@ func (s *authService) ValidateToken(tokenString string) (*Claims, error) {
 	return nil, errors.New("invalid token")
 }
 
+func (s *authService) RefreshSession(ctx context.Context, tokenString string) (*models.User, string, error) {
+	if strings.TrimSpace(tokenString) == "" {
+		return nil, "", errors.New("missing token")
+	}
+	keyFunc := func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(s.secret), nil
+	}
+	strictParser := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	claims := &Claims{}
+	token, err := strictParser.ParseWithClaims(tokenString, claims, keyFunc)
+	if err != nil {
+		if !errors.Is(err, jwt.ErrTokenExpired) {
+			return nil, "", err
+		}
+		claims = &Claims{}
+		looseParser := jwt.NewParser(
+			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+			jwt.WithoutClaimsValidation(),
+		)
+		token, err = looseParser.ParseWithClaims(tokenString, claims, keyFunc)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if token == nil {
+		return nil, "", errors.New("invalid token")
+	}
+	c, ok := token.Claims.(*Claims)
+	if !ok {
+		return nil, "", errors.New("invalid claims")
+	}
+	// Reject tokens expired too long ago (limit refresh window)
+	if c.ExpiresAt != nil {
+		maxPast := time.Now().Add(-7 * 24 * time.Hour)
+		if c.ExpiresAt.Time.Before(maxPast) {
+			return nil, "", errors.New("session expired; please sign in again")
+		}
+	}
+	userID, err := primitive.ObjectIDFromHex(c.UserID)
+	if err != nil {
+		return nil, "", errors.New("invalid user in token")
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, "", errors.New("user not found")
+	}
+	if !user.Active {
+		return nil, "", errors.New("account is deactivated")
+	}
+	newToken, err := s.GenerateToken(user)
+	if err != nil {
+		return nil, "", err
+	}
+	return user, newToken, nil
+}
+
 func (s *authService) generateRandomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -419,6 +480,12 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *s
 		}
 	}
 	if birthday != nil {
+		now := time.Now().UTC()
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		b := time.Date(birthday.Year(), birthday.Month(), birthday.Day(), 0, 0, 0, 0, time.UTC)
+		if b.After(today) {
+			return errors.New("date of birth cannot be in the future")
+		}
 		user.Birthday = birthday
 	}
 	user.UpdatedAt = time.Now()

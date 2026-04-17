@@ -234,7 +234,7 @@ func (h *ReviewHandler) Delete(c *gin.Context) {
 }
 
 func (h *ReviewHandler) MarkHelpful(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	id, err := primitive.ObjectIDFromHex(c.Param("reviewId"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid review ID"})
 		return
@@ -287,11 +287,17 @@ func (h *ReviewHandler) List(c *gin.Context) {
 		skip = 0
 	}
 
-	// This would need a List method in the service
-	// For now, return empty - can be implemented later
+	reviews, total, err := h.reviewService.ListByStatus(c.Request.Context(), status, limit, skip)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if reviews == nil {
+		reviews = []*models.ProductReview{}
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"reviews": []interface{}{},
-		"total":   0,
+		"reviews": reviews,
+		"total":   total,
 		"limit":   limit,
 		"skip":    skip,
 		"status":  status,

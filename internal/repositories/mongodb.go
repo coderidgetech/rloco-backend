@@ -233,5 +233,19 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 		Keys: bson.D{{Key: "status", Value: 1}, {Key: "created_at", Value: -1}},
 	})
 
+	// Stripe webhook idempotency (event IDs); TTL avoids unbounded growth
+	stripeWebhookEvents := m.GetCollection("stripe_webhook_events")
+	stripeWebhookEvents.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "created_at", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(7 * 24 * 3600),
+	})
+
+	// Order idempotency keys (checkout retries)
+	orderIdem := m.GetCollection("order_idempotency")
+	orderIdem.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "created_at", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(48 * 3600),
+	})
+
 	return nil
 }
