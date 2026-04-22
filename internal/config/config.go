@@ -81,9 +81,12 @@ func (c *Config) EmailConfigReady() bool {
 }
 
 func Load() (*Config, error) {
-	// Load .env from current directory (e.g. when run from backend/) and from backend/.env (when run from repo root)
-	_ = godotenv.Load(".env")
-	_ = godotenv.Load("backend/.env")
+	// In production, only use the process environment (e.g. App Platform). Do not load .env —
+	// it can mask missing platform env and leave JWT_SECRET at the dev default.
+	if os.Getenv("ENV") != "production" {
+		_ = godotenv.Load(".env")
+		_ = godotenv.Load("backend/.env")
+	}
 
 	env := getEnv("ENV", "development")
 	jwtSecret := getEnv("JWT_SECRET", defaultJWTSecret)
