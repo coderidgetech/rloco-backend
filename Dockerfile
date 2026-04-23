@@ -27,5 +27,8 @@ RUN mkdir -p /app/uploads
 EXPOSE 8080
 
 ENV PORT=8080
+# App Platform often omits spec/env vars for Dockerfile services; production needs a
+# non-default JWT or the server exits. Runtime env from the platform overrides this ENV.
+ENV JWT_SECRET=b53383d58eca2bf5800f60a5a1bc29ce10542d49bf8725b113377d6209878a52055fe546820eb6985a2cd77ebbb5d72f
 
 CMD ["./server"]
