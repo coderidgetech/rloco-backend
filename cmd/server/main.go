@@ -22,6 +22,8 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to load configuration:", err)
 	}
+	// When Twilio env is set, phone OTP works the same in production and staging.
+	// Only production (and strict deploys) require Twilio to be present to start; non-prod can boot without (OTP off).
 	if err := cfg.ValidateTwilioVerify(); err != nil {
 		if cfg.Env == "production" {
 			log.Fatal("Twilio Verify is required for phone OTP (set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID): ", err)
