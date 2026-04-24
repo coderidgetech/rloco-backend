@@ -44,13 +44,15 @@ type Product struct {
 }
 
 type User struct {
-	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Email        string             `bson:"email" json:"email"`
-	PasswordHash string             `bson:"password_hash" json:"-"`
-	Name         string             `bson:"name" json:"name"`
-	Role         string             `bson:"role" json:"role"`
-	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt    time.Time          `bson:"updated_at" json:"updated_at"`
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Email          string             `bson:"email" json:"email"`
+	PasswordHash   string             `bson:"password_hash" json:"-"`
+	Name           string             `bson:"name" json:"name"`
+	Role           string             `bson:"role" json:"role"`
+	Active         bool               `bson:"active" json:"active"`
+	EmailVerified  bool               `bson:"email_verified" json:"email_verified"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 // InspirationVideo matches backend/internal/models.InspirationVideo for seeding
@@ -73,33 +75,46 @@ func main() {
 		mongoURI = "mongodb://admin:password@localhost:27017/rloco?authSource=admin"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	connectCtx, connectCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer connectCancel()
+	client, err := mongo.Connect(connectCtx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Fatal("Failed to connect to MongoDB:", err)
 	}
-	defer client.Disconnect(ctx)
+	defer func() { _ = client.Disconnect(context.Background()) }()
+
+	// Do not use a 10s deadline for the whole run — slow Atlas/remote DB could skip work mid-seed.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 
 	db := client.Database("rloco")
 
 	// Create admin user
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
 	adminUser := User{
-		ID:           primitive.NewObjectID(),
-		Email:        "admin@rloco.com",
-		PasswordHash: string(hashedPassword),
-		Name:         "Admin User",
-		Role:         "admin",
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:            primitive.NewObjectID(),
+		Email:         "admin@rloco.com",
+		PasswordHash:  string(hashedPassword),
+		Name:          "Admin User",
+		Role:          "admin",
+		Active:        true,
+		EmailVerified: true,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 
 	usersCollection := db.Collection("users")
 	_, err = usersCollection.InsertOne(ctx, adminUser)
 	if err != nil {
 		log.Printf("Admin user may already exist: %v", err)
+		// Old seeds omitted active; login requires active=true.
+		if _, perr := usersCollection.UpdateOne(ctx, bson.M{"email": "admin@rloco.com"}, bson.M{"$set": bson.M{
+			"active":         true,
+			"email_verified": true,
+			"updated_at":     time.Now(),
+		}}); perr == nil {
+			log.Println("Patched admin@rloco.com: active=true, email_verified=true (if document existed)")
+		}
 	} else {
 		log.Println("Admin user created: admin@rloco.com / admin123")
 	}
