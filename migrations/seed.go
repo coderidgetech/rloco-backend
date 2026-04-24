@@ -93,7 +93,7 @@ func main() {
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
 	adminUser := User{
 		ID:            primitive.NewObjectID(),
-		Email:         "admin@rloco.com",
+		Email:         "admin@rloko.com",
 		PasswordHash:  string(hashedPassword),
 		Name:          "Admin User",
 		Role:          "admin",
@@ -108,15 +108,15 @@ func main() {
 	if err != nil {
 		log.Printf("Admin user may already exist: %v", err)
 		// Old seeds omitted active; login requires active=true.
-		if _, perr := usersCollection.UpdateOne(ctx, bson.M{"email": "admin@rloco.com"}, bson.M{"$set": bson.M{
+		if _, perr := usersCollection.UpdateOne(ctx, bson.M{"email": "admin@rloko.com"}, bson.M{"$set": bson.M{
 			"active":         true,
 			"email_verified": true,
 			"updated_at":     time.Now(),
 		}}); perr == nil {
-			log.Println("Patched admin@rloco.com: active=true, email_verified=true (if document existed)")
+			log.Println("Patched admin@rloko.com: active=true, email_verified=true (if document existed)")
 		}
 	} else {
-		log.Println("Admin user created: admin@rloco.com / admin123")
+		log.Println("Admin user created: admin@rloko.com / admin123")
 	}
 
 	// Upsert default categories by slug so re-running seed gives all four and sets images
