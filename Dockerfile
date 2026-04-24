@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates wget
 
 WORKDIR /app
 

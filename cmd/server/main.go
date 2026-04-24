@@ -22,13 +22,10 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to load configuration:", err)
 	}
-	// When Twilio env is set, phone OTP works the same in production and staging.
-	// Only production (and strict deploys) require Twilio to be present to start; non-prod can boot without (OTP off).
+	// Never exit on missing Twilio — NewTwilioVerifyClient already handles empty creds; OTP routes use Enabled().
+	// A missing or partial Twilio config would otherwise keep the whole API down (Caddy 502) on misconfigured droplets.
 	if err := cfg.ValidateTwilioVerify(); err != nil {
-		if cfg.Env == "production" {
-			log.Fatal("Twilio Verify is required for phone OTP (set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID): ", err)
-		}
-		log.Println("WARNING: Twilio Verify not configured; phone OTP disabled:", err)
+		log.Println("WARNING: Twilio Verify not configured; phone registration OTP disabled:", err)
 	}
 	if !cfg.EmailConfigReady() {
 		log.Println("WARNING: Email notifications are disabled. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD (or supported aliases) to enable delivery.")
