@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"time"
@@ -89,34 +90,50 @@ func main() {
 
 	db := client.Database("rloco")
 
-	// Create admin user
+	// Admin: single user admin@rloko.com; migrate legacy admin@rloco.com in place (avoids unique index E11000)
+	const adminEmail = "admin@rloko.com"
+	const legacyAdminEmail = "admin@rloco.com"
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
-	adminUser := User{
-		ID:            primitive.NewObjectID(),
-		Email:         "admin@rloko.com",
-		PasswordHash:  string(hashedPassword),
-		Name:          "Admin User",
-		Role:          "admin",
-		Active:        true,
-		EmailVerified: true,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
+	now := time.Now()
 
 	usersCollection := db.Collection("users")
-	_, err = usersCollection.InsertOne(ctx, adminUser)
-	if err != nil {
-		log.Printf("Admin user may already exist: %v", err)
-		// Old seeds omitted active; login requires active=true.
-		if _, perr := usersCollection.UpdateOne(ctx, bson.M{"email": "admin@rloko.com"}, bson.M{"$set": bson.M{
+	adminFilter := bson.M{"email": bson.M{"$in": []string{adminEmail, legacyAdminEmail}}}
+	var adminRow struct {
+		ID primitive.ObjectID `bson:"_id"`
+	}
+	findErr := usersCollection.FindOne(ctx, adminFilter).Decode(&adminRow)
+	if findErr != nil && !errors.Is(findErr, mongo.ErrNoDocuments) {
+		log.Fatalf("admin user lookup: %v", findErr)
+	}
+	if errors.Is(findErr, mongo.ErrNoDocuments) {
+		adminUser := User{
+			ID:            primitive.NewObjectID(),
+			Email:         adminEmail,
+			PasswordHash:  string(hashedPassword),
+			Name:          "Admin User",
+			Role:          "admin",
+			Active:        true,
+			EmailVerified: true,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		if _, insErr := usersCollection.InsertOne(ctx, adminUser); insErr != nil {
+			log.Fatalf("admin insert: %v", insErr)
+		}
+		log.Println("Admin user created:", adminEmail, "/ admin123")
+	} else {
+		if _, upErr := usersCollection.UpdateOne(ctx, bson.M{"_id": adminRow.ID}, bson.M{"$set": bson.M{
+			"email":          adminEmail,
+			"password_hash":  string(hashedPassword),
+			"name":           "Admin User",
+			"role":           "admin",
 			"active":         true,
 			"email_verified": true,
-			"updated_at":     time.Now(),
-		}}); perr == nil {
-			log.Println("Patched admin@rloko.com: active=true, email_verified=true (if document existed)")
+			"updated_at":     now,
+		}}); upErr != nil {
+			log.Fatalf("admin update: %v", upErr)
 		}
-	} else {
-		log.Println("Admin user created: admin@rloko.com / admin123")
+		log.Println("Admin user ensured (migrated", legacyAdminEmail, "→", adminEmail+" if needed) / admin123")
 	}
 
 	// Upsert default categories by slug so re-running seed gives all four and sets images
@@ -134,7 +151,7 @@ func main() {
 		{"Dresses", "dresses", "women", "https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=600&q=80", []string{"Casual Dresses", "Formal Dresses"}, 3},
 		{"Accessories", "accessories", "unisex", "https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=600&q=80", []string{"Bags", "Watches", "Jewelry"}, 4},
 	}
-	now := time.Now()
+	now = time.Now()
 	for _, c := range defaultCategories {
 		update := bson.M{
 			"$set": bson.M{
