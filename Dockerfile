@@ -1,18 +1,21 @@
+# syntax=docker/dockerfile:1.4
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
 RUN apk add --no-cache git
 
-# Copy go.mod first and download deps. Do not require go.sum in this step — some
-# deploy contexts omit go.sum (not committed / wrong root); go mod download still works.
 COPY go.mod ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
-# Full source (includes go.sum when present for reproducible builds)
+# Full source
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o server ./cmd/server
+# -a removed: much faster; CGO_ENABLED=0 still gives static binary
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
 
 FROM alpine:latest
 
