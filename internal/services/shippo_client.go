@@ -134,7 +134,19 @@ func (c *shippoClient) canQuote() bool {
 		c.parcel.MassUnit != ""
 }
 
-func (c *shippoClient) quoteRates(ctx context.Context, destination shippoAddress) ([]*models.ShippingMethod, error) {
+func (c *shippoClient) parcelForQuote(weightLb *float64) shippoParcel {
+	p := c.parcel
+	if weightLb != nil && *weightLb > 0 {
+		w := *weightLb
+		if w < 0.01 {
+			w = 0.01
+		}
+		p.Weight = strconv.FormatFloat(w, 'f', 2, 64)
+	}
+	return p
+}
+
+func (c *shippoClient) quoteRates(ctx context.Context, destination shippoAddress, weightLb *float64) ([]*models.ShippingMethod, error) {
 	if !c.canQuote() {
 		return nil, fmt.Errorf("shippo is not fully configured")
 	}
@@ -145,7 +157,7 @@ func (c *shippoClient) quoteRates(ctx context.Context, destination shippoAddress
 	payload := shippoShipmentRequest{
 		AddressFrom: c.origin,
 		AddressTo:   destination,
-		Parcels:     []shippoParcel{c.parcel},
+		Parcels:     []shippoParcel{c.parcelForQuote(weightLb)},
 		Async:       false,
 	}
 

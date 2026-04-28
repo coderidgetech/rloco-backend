@@ -95,6 +95,15 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		subtotal += price * float64(item.Quantity)
 	}
 
+	var orderWeightLb float64
+	for _, it := range validatedItems {
+		orderWeightLb += DefaultItemWeightLb * float64(it.Quantity)
+	}
+	if orderWeightLb <= 0 {
+		orderWeightLb = DefaultItemWeightLb
+	}
+	weightPtr := orderWeightLb
+
 	// Apply promotion if provided (usage incremented only after order persists)
 	var discount float64
 	var appliedPromotionID *primitive.ObjectID
@@ -133,6 +142,7 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 			Email:      shippingInfo.Email,
 			Phone:      shippingInfo.Phone,
 			Subtotal:   subtotal,
+			Weight:     &weightPtr,
 		})
 		if err == nil && len(methods) > 0 {
 			// Orders are still stored in USD internally, so normalize INR quotes.

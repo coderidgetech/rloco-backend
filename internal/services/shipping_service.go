@@ -72,7 +72,7 @@ func (s *shippingService) calculateShippoShipping(ctx context.Context, req Shipp
 		return nil, nil
 	}
 
-	return s.shippo.quoteRates(ctx, destination)
+	return s.shippo.quoteRates(ctx, destination, req.Weight)
 }
 
 func (s *shippingService) calculateStoredShipping(ctx context.Context, country string, subtotal float64, weight *float64) ([]*models.ShippingMethod, error) {
