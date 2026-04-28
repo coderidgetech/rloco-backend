@@ -12,15 +12,24 @@ import (
 )
 
 type AuthHandler struct {
-	authService services.AuthService
-	userRepo    repositories.UserRepository
+	authService      services.AuthService
+	userRepo         repositories.UserRepository
+	googleClientID   string // Web OAuth client id (public); same as GOOGLE_CLIENT_ID on API
 }
 
-func NewAuthHandler(authService services.AuthService, userRepo repositories.UserRepository) *AuthHandler {
+func NewAuthHandler(authService services.AuthService, userRepo repositories.UserRepository, googleClientID string) *AuthHandler {
 	return &AuthHandler{
-		authService: authService,
-		userRepo:    userRepo,
+		authService:    authService,
+		userRepo:       userRepo,
+		googleClientID: strings.TrimSpace(googleClientID),
 	}
+}
+
+// GetClientAuthConfig returns public values the SPA needs when Vite was built without VITE_GOOGLE_CLIENT_ID.
+func (h *AuthHandler) GetClientAuthConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"google_client_id": h.googleClientID,
+	})
 }
 
 type RegisterRequest struct {

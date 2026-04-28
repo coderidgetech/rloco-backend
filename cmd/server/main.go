@@ -110,7 +110,7 @@ func main() {
 	addressService := services.NewAddressService(addressRepo)
 
 	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(authService, userRepo)
+	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.GoogleClientID)
 	productHandler := handlers.NewProductHandler(productService, storageService)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	orderHandler := handlers.NewOrderHandler(orderService, productService, orderIdempotencyRepo)
@@ -180,6 +180,7 @@ func main() {
 		// Authentication
 		auth := api.Group("/auth")
 		{
+			auth.GET("/client-config", authHandler.GetClientAuthConfig)
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/register-otp/send", authHandler.SendRegistrationOTP)
 			auth.POST("/register-otp/complete", authHandler.CompleteRegistrationOTP)
