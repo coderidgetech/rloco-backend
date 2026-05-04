@@ -70,7 +70,7 @@ func main() {
 
 	// Update middleware to use config
 	middleware.SetJWTSecret(cfg.JWTSecret)
-	middleware.ConfigureRateLimit(cfg.Env == "production")
+	middleware.ConfigureRateLimit(cfg.APIRateLimitRPM)
 	middleware.ConfigureErrorResponses(cfg.Env == "production")
 
 	// Initialize services
@@ -110,7 +110,7 @@ func main() {
 	addressService := services.NewAddressService(addressRepo)
 
 	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.GoogleClientID)
+	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.GoogleClientID, cfg.GoogleMapsBrowserKey)
 	productHandler := handlers.NewProductHandler(productService, storageService)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	orderHandler := handlers.NewOrderHandler(orderService, productService, orderIdempotencyRepo)
@@ -136,6 +136,7 @@ func main() {
 	paymentHandler := handlers.NewPaymentHandler(paymentService)
 	videoHandler := handlers.NewVideoHandler(videoService)
 	addressHandler := handlers.NewAddressHandler(addressService)
+	rewardsHandler := handlers.NewRewardsHandler(orderRepo)
 	newsletterHandler := handlers.NewNewsletterHandler(newsletterService)
 	contactHandler := handlers.NewContactHandler(emailService)
 	vendorHandler := handlers.NewVendorHandler(vendorService)
@@ -368,6 +369,14 @@ func main() {
 			addresses.PUT("/:id", addressHandler.Update)
 			addresses.DELETE("/:id", addressHandler.Delete)
 			addresses.PUT("/:id/default", addressHandler.SetDefault)
+		}
+
+		// Rewards summary (authenticated — derived from order history)
+		rewardsG := api.Group("/rewards")
+		rewardsG.Use(middleware.AuthRequired())
+		rewardsG.Use(middleware.LoadUserMiddleware(userRepo))
+		{
+			rewardsG.GET("/summary", rewardsHandler.GetSummary)
 		}
 
 		// Public Configuration & Content (no auth required)

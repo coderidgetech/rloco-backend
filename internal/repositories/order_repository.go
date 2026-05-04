@@ -20,6 +20,8 @@ type OrderRepository interface {
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
 	List(ctx context.Context, filter bson.M, limit, skip int) ([]*models.Order, int64, error)
 	GetStats(ctx context.Context, startDate, endDate time.Time) (map[string]interface{}, error)
+	// GetUserRewardStats: non-cancelled orders count and sum of order totals (lifetime value).
+	GetUserRewardStats(ctx context.Context, userID primitive.ObjectID) (orderCount int64, lifetimeSpend float64, err error)
 }
 
 type orderRepository struct {
@@ -124,6 +126,37 @@ func (r *orderRepository) List(ctx context.Context, filter bson.M, limit, skip i
 	}
 
 	return orders, total, nil
+}
+
+func (r *orderRepository) GetUserRewardStats(ctx context.Context, userID primitive.ObjectID) (int64, float64, error) {
+	match := bson.M{
+		"user_id": userID,
+		"status":  bson.M{"$ne": "cancelled"},
+	}
+	pipeline := []bson.M{
+		{"$match": match},
+		{"$group": bson.M{
+			"_id": nil,
+			"n":   bson.M{"$sum": 1},
+			"sum": bson.M{"$sum": "$total"},
+		}},
+	}
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer cursor.Close(ctx)
+	var out []struct {
+		N   int64   `bson:"n"`
+		Sum float64 `bson:"sum"`
+	}
+	if err := cursor.All(ctx, &out); err != nil {
+		return 0, 0, err
+	}
+	if len(out) == 0 {
+		return 0, 0, nil
+	}
+	return out[0].N, out[0].Sum, nil
 }
 
 func (r *orderRepository) GetStats(ctx context.Context, startDate, endDate time.Time) (map[string]interface{}, error) {

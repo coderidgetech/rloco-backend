@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -33,7 +34,8 @@ type Config struct {
 	AdminEmail          string // optional; new order alerts sent here
 	StripeSecretKey     string
 	StripeWebhookSecret string
-	GoogleClientID      string
+	GoogleClientID         string
+	GoogleMapsBrowserKey   string // browser Maps+Places key; exposed via GET /api/auth/client-config (referrer-restricted)
 	ShippoAPIKey        string
 	ShippoBaseURL       string
 	ShippoFromName      string
@@ -55,6 +57,8 @@ type Config struct {
 	TwilioAccountSid       string
 	TwilioAuthToken        string
 	TwilioVerifyServiceSid string // Verify Service SID (VA...)
+	// APIRateLimitRPM is max HTTP API requests per client IP per minute (global limiter, production only).
+	APIRateLimitRPM int
 }
 
 // ValidateTwilioVerify returns an error if Twilio Verify env is incomplete (registration OTP will not work).
@@ -94,6 +98,22 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("production requires a strong JWT_SECRET (do not use default)")
 	}
 
+	apiRL := strings.TrimSpace(os.Getenv("API_RATE_LIMIT_RPM"))
+	var apiRateLimitRPM int
+	if apiRL != "" {
+		n, err := strconv.Atoi(apiRL)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("API_RATE_LIMIT_RPM must be a positive integer")
+		}
+		apiRateLimitRPM = n
+	} else {
+		if env == "production" {
+			apiRateLimitRPM = 500
+		} else {
+			apiRateLimitRPM = 1000
+		}
+	}
+
 	return &Config{
 		Port:                getEnv("PORT", "8080"),
 		Env:                 env,
@@ -117,7 +137,8 @@ func Load() (*Config, error) {
 		AdminEmail:          getEnv("ADMIN_EMAIL", ""),
 		StripeSecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
-		GoogleClientID:      getEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleClientID:       getEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleMapsBrowserKey: strings.TrimSpace(firstNonEmptyEnv("GOOGLE_MAPS_BROWSER_KEY", "GOOGLE_MAPS_API_KEY")),
 		ShippoAPIKey:        getEnv("SHIPPO_API_KEY", ""),
 		ShippoBaseURL:       getEnv("SHIPPO_BASE_URL", "https://api.goshippo.com"),
 		ShippoFromName:      getEnv("SHIPPO_FROM_NAME", ""),
@@ -138,6 +159,7 @@ func Load() (*Config, error) {
 		TwilioAccountSid:       getEnv("TWILIO_ACCOUNT_SID", ""),
 		TwilioAuthToken:        getEnv("TWILIO_AUTH_TOKEN", ""),
 		TwilioVerifyServiceSid: getEnv("TWILIO_VERIFY_SERVICE_SID", ""),
+		APIRateLimitRPM:        apiRateLimitRPM,
 	}, nil
 }
 

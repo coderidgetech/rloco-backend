@@ -26,23 +26,22 @@ var limiter *rateLimiter
 func init() {
 	limiter = &rateLimiter{
 		visitors: make(map[string]*visitor),
-		rate:     1000, // development default; aligned from main via ConfigureRateLimit
+		rate:     1000, // overridden in main via ConfigureRateLimit(cfg.APIRateLimitRPM)
 		window:   1 * time.Minute,
 	}
 	go limiter.cleanup()
 }
 
-// ConfigureRateLimit sets per-IP RPM from the same ENV as config (not raw os.Getenv in init).
-func ConfigureRateLimit(isProduction bool) {
+// ConfigureRateLimit sets per-IP requests per minute (from config.APIRateLimitRPM).
+func ConfigureRateLimit(rpm int) {
 	if limiter == nil {
 		return
 	}
-	limiter.mu.Lock()
-	if isProduction {
-		limiter.rate = 100
-	} else {
-		limiter.rate = 1000
+	if rpm < 1 {
+		rpm = 1
 	}
+	limiter.mu.Lock()
+	limiter.rate = rpm
 	limiter.mu.Unlock()
 }
 

@@ -12,23 +12,31 @@ import (
 )
 
 type AuthHandler struct {
-	authService      services.AuthService
-	userRepo         repositories.UserRepository
-	googleClientID   string // Web OAuth client id (public); same as GOOGLE_CLIENT_ID on API
+	authService           services.AuthService
+	userRepo              repositories.UserRepository
+	googleClientID        string // Web OAuth client id (public); same as GOOGLE_CLIENT_ID on API
+	googleMapsBrowserKey  string // Maps JavaScript + Places (browser key; HTTP referrer–restricted in GCP)
 }
 
-func NewAuthHandler(authService services.AuthService, userRepo repositories.UserRepository, googleClientID string) *AuthHandler {
+func NewAuthHandler(
+	authService services.AuthService,
+	userRepo repositories.UserRepository,
+	googleClientID string,
+	googleMapsBrowserKey string,
+) *AuthHandler {
 	return &AuthHandler{
-		authService:    authService,
-		userRepo:       userRepo,
-		googleClientID: strings.TrimSpace(googleClientID),
+		authService:          authService,
+		userRepo:             userRepo,
+		googleClientID:       strings.TrimSpace(googleClientID),
+		googleMapsBrowserKey: strings.TrimSpace(googleMapsBrowserKey),
 	}
 }
 
-// GetClientAuthConfig returns public values the SPA needs when Vite was built without VITE_GOOGLE_CLIENT_ID.
+// GetClientAuthConfig returns public values the SPA needs when Vite was built without VITE_* (e.g. OAuth client id, Maps key).
 func (h *AuthHandler) GetClientAuthConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"google_client_id": h.googleClientID,
+		"google_client_id":    h.googleClientID,
+		"google_maps_api_key": h.googleMapsBrowserKey,
 	})
 }
 

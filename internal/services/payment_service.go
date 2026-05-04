@@ -169,18 +169,18 @@ func (s *paymentService) createStripePaymentIntent(ctx context.Context, transact
 		},
 	}
 
-	// For INR: always set payment_method_types so UPI is available (Stripe only shows card if we use automatic and UPI isn't enabled in Dashboard)
+	// Restrict Payment Sheet to what the shopper chose (card vs UPI), not both at once.
+	pm := strings.ToLower(strings.TrimSpace(paymentMethod))
 	if currency == "inr" {
-		if paymentMethod == "upi" || paymentMethod == "wallet" {
-			params.PaymentMethodTypes = stripe.StringSlice([]string{"upi", "card"})
-		} else {
-			params.PaymentMethodTypes = stripe.StringSlice([]string{"card", "upi"})
+		switch pm {
+		case "upi", "wallet":
+			params.PaymentMethodTypes = stripe.StringSlice([]string{"upi"})
+		default:
+			params.PaymentMethodTypes = stripe.StringSlice([]string{"card"})
 		}
 	} else {
-		// USD or other: use automatic payment methods from Dashboard
-		params.AutomaticPaymentMethods = &stripe.PaymentIntentAutomaticPaymentMethodsParams{
-			Enabled: stripe.Bool(true),
-		}
+		// Non-INR: card-only unless we explicitly add other rails later.
+		params.PaymentMethodTypes = stripe.StringSlice([]string{"card"})
 	}
 
 	params.IdempotencyKey = stripe.String(fmt.Sprintf("pi-create-%s", transaction.ID.Hex()))
