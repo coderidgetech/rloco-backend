@@ -20,6 +20,7 @@ type User struct {
 	Birthday     *time.Time          `bson:"birthday,omitempty" json:"birthday,omitempty"`
 	Active       bool                `bson:"active" json:"active"` // User account status
 	EmailVerified bool               `bson:"email_verified" json:"email_verified"`
+	FCMTokens    []string            `bson:"fcm_tokens,omitempty" json:"-"` // Firebase Cloud Messaging device tokens (max 5)
 	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`
 }
@@ -55,8 +56,12 @@ type Product struct {
 	// AvailableMarkets lists markets where the product is sold (e.g. "IN", "US").
 	AvailableMarkets []string            `bson:"available_markets,omitempty" json:"available_markets,omitempty"`
 	VendorID         *primitive.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
-	CreatedAt        time.Time           `bson:"created_at" json:"created_at"`
-	UpdatedAt        time.Time           `bson:"updated_at" json:"updated_at"`
+	// Variant fields — products sharing the same VariantGroupID are color siblings.
+	VariantGroupID *primitive.ObjectID `bson:"variant_group_id,omitempty" json:"variant_group_id,omitempty"`
+	Color          string              `bson:"color,omitempty" json:"color,omitempty"`
+	IsMainVariant  bool                `bson:"is_main_variant,omitempty" json:"is_main_variant,omitempty"`
+	CreatedAt      time.Time           `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
 // Category represents a product category
@@ -88,10 +93,11 @@ type Order struct {
 	Status         string             `bson:"status" json:"status"` // "pending", "processing", "shipped", "delivered", "cancelled"
 	PaymentMethod  string             `bson:"payment_method" json:"payment_method"`
 	PaymentStatus  string             `bson:"payment_status" json:"payment_status"` // "pending", "paid", "failed"
-	TrackingNumber *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
-	PromotionCode  *string            `bson:"promotion_code,omitempty" json:"promotion_code,omitempty"`
-	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt      time.Time          `bson:"updated_at" json:"updated_at"`
+	TrackingNumber      *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
+	PromotionCode       *string            `bson:"promotion_code,omitempty" json:"promotion_code,omitempty"`
+	RewardPointsApplied int64              `bson:"reward_points_applied,omitempty" json:"reward_points_applied,omitempty"`
+	CreatedAt           time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt           time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 // OrderItem represents an item in an order
@@ -401,4 +407,59 @@ type NewsletterSubscription struct {
 	Active    bool               `bson:"active" json:"active"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+// VendorApplication is submitted by anyone who wants to sell on Rloko.
+// Status flow: pending → approved | rejected
+type VendorApplication struct {
+	ID primitive.ObjectID `bson:"_id" json:"id"`
+
+	// Business details
+	BusinessName string `bson:"business_name" json:"business_name"`
+	BusinessType string `bson:"business_type" json:"business_type"` // individual | partnership | company
+	GSTNumber    string `bson:"gst_number,omitempty" json:"gst_number,omitempty"`
+	Website      string `bson:"website,omitempty" json:"website,omitempty"`
+	Instagram    string `bson:"instagram,omitempty" json:"instagram,omitempty"`
+
+	// Contact
+	ContactName string `bson:"contact_name" json:"contact_name"`
+	Email       string `bson:"email" json:"email"`
+	Phone       string `bson:"phone" json:"phone"`
+	WhatsApp    string `bson:"whatsapp,omitempty" json:"whatsapp,omitempty"`
+
+	// Location
+	AddressLine1 string `bson:"address_line1" json:"address_line1"`
+	AddressLine2 string `bson:"address_line2,omitempty" json:"address_line2,omitempty"`
+	City         string `bson:"city" json:"city"`
+	State        string `bson:"state" json:"state"`
+	PINCode      string `bson:"pin_code" json:"pin_code"`
+	Country      string `bson:"country" json:"country"`
+
+	// Products
+	Category            string `bson:"category" json:"category"`
+	ProductDescription  string `bson:"product_description" json:"product_description"`
+	PriceRange          string `bson:"price_range" json:"price_range"`   // "0-500" | "500-2000" | "2000-10000" | "10000+"
+	EstimatedListings   string `bson:"estimated_listings" json:"estimated_listings"` // "1-10" | "10-50" | "50-100" | "100+"
+
+	// Extra
+	HowDidYouHear string `bson:"how_did_you_hear,omitempty" json:"how_did_you_hear,omitempty"`
+	Message       string `bson:"message,omitempty" json:"message,omitempty"`
+
+	// Review
+	Status     string `bson:"status" json:"status"` // pending | approved | rejected
+	AdminNotes string `bson:"admin_notes,omitempty" json:"admin_notes,omitempty"`
+
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+}
+
+// RewardsTransaction records points earned or redeemed by a user
+type RewardsTransaction struct {
+	ID          primitive.ObjectID `bson:"_id" json:"id"`
+	UserID      primitive.ObjectID `bson:"user_id" json:"user_id"`
+	Type        string             `bson:"type" json:"type"`               // "earned" | "redeemed"
+	Points      int64              `bson:"points" json:"points"`
+	Reference   string             `bson:"reference" json:"reference"`     // order number or manual label
+	Description string             `bson:"description" json:"description"`
+	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 }

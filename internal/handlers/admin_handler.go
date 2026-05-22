@@ -6,21 +6,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"rloco-backend/internal/models"
 	"rloco-backend/internal/repositories"
 	"rloco-backend/internal/services"
+
+	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type AdminHandler struct {
-	productService   services.ProductService
-	orderService     services.OrderService
-	userRepo         repositories.UserRepository
-	vendorService    services.VendorService
-	promotionService services.PromotionService
-	analyticsService services.AnalyticsService
-	configService    services.ConfigService
+	productService        services.ProductService
+	orderService          services.OrderService
+	userRepo              repositories.UserRepository
+	vendorService         services.VendorService
+	promotionService      services.PromotionService
+	analyticsService      services.AnalyticsService
+	configService         services.ConfigService
+	advancedAnalyticsRepo repositories.AdvancedAnalyticsRepository
 }
 
 func NewAdminHandler(
@@ -31,15 +33,17 @@ func NewAdminHandler(
 	promotionService services.PromotionService,
 	analyticsService services.AnalyticsService,
 	configService services.ConfigService,
+	advancedAnalyticsRepo repositories.AdvancedAnalyticsRepository,
 ) *AdminHandler {
 	return &AdminHandler{
-		productService:   productService,
-		orderService:     orderService,
-		userRepo:         userRepo,
-		vendorService:    vendorService,
-		promotionService: promotionService,
-		analyticsService: analyticsService,
-		configService:    configService,
+		productService:        productService,
+		orderService:          orderService,
+		userRepo:              userRepo,
+		vendorService:         vendorService,
+		promotionService:      promotionService,
+		analyticsService:      analyticsService,
+		configService:         configService,
+		advancedAnalyticsRepo: advancedAnalyticsRepo,
 	}
 }
 
@@ -279,14 +283,48 @@ func (h *AdminHandler) GetVendor(c *gin.Context) {
 func (h *AdminHandler) CreateVendor(c *gin.Context) {
 	var req struct {
 		models.Vendor
-		InitialPassword string `json:"initial_password,omitempty"`
+		InitialPassword string                 `json:"initial_password,omitempty"`
+		Metadata        map[string]interface{} `json:"metadata,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := h.vendorService.Create(c.Request.Context(), &req.Vendor, req.InitialPassword)
+	v := req.Vendor
+	if req.Metadata != nil {
+		if p, ok := req.Metadata["permissions"].(map[string]interface{}); ok && len(p) > 0 {
+			v.Permissions = p
+		}
+		if code, ok := req.Metadata["subscriptionPlanCode"].(string); ok && strings.TrimSpace(code) != "" {
+			v.SubscriptionPlan = strings.TrimSpace(code)
+		} else if planObj, ok := req.Metadata["subscriptionPlan"].(map[string]interface{}); ok {
+			if cn, ok := planObj["configName"].(string); ok && strings.TrimSpace(cn) != "" {
+				v.SubscriptionPlan = strings.TrimSpace(cn)
+			}
+		}
+		skipMeta := map[string]bool{
+			"permissions": true, "subscriptionPlan": true, "subscriptionPlanId": true, "subscriptionPlanCode": true,
+		}
+		pref := make(map[string]interface{})
+		for k, val := range req.Metadata {
+			if skipMeta[k] {
+				continue
+			}
+			pref[k] = val
+		}
+		if len(pref) > 0 {
+			if v.Preferences == nil {
+				v.Preferences = pref
+			} else {
+				for k, val := range pref {
+					v.Preferences[k] = val
+				}
+			}
+		}
+	}
+
+	result, err := h.vendorService.Create(c.Request.Context(), &v, req.InitialPassword)
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "already exists") {
@@ -581,26 +619,26 @@ func (h *AdminHandler) UpdateSettings(c *gin.Context) {
 func getDefaultConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"general": map[string]interface{}{
-			"siteName":            "Rloco",
-			"tagline":             "Modern Luxury Fashion",
-			"description":         "Rloco is a premium fashion retailer offering curated collections of luxury apparel, accessories, and beauty products.",
-			"email":               "hello@rloco.com",
-			"phone":               "+1 (555) 123-4567",
-			"supportEmail":        "support@rloco.com",
-			"address":             "123 Fashion Avenue, New York, NY 10001, United States",
+			"siteName":     "Rloco",
+			"tagline":      "Modern Luxury Fashion",
+			"description":  "Rloco is a premium fashion retailer offering curated collections of luxury apparel, accessories, and beauty products.",
+			"email":        "hello@rloco.com",
+			"phone":        "+1 (555) 123-4567",
+			"supportEmail": "support@rloco.com",
+			"address":      "123 Fashion Avenue, New York, NY 10001, United States",
 			"socialMedia": map[string]interface{}{
 				"instagram": "@rloco",
 				"facebook":  "facebook.com/rloco",
 				"twitter":   "@rloco",
 				"pinterest": "pinterest.com/rloco",
 			},
-			"currency":            "usd",
-			"timezone":            "america/new_york",
-			"dateFormat":          "mm/dd/yyyy",
-			"multiCurrency":       true,
-			"autoDetectLocation":  true,
-			"maintenanceMode":     false,
-			"maintenanceMessage":  "We're currently performing scheduled maintenance. We'll be back soon!",
+			"currency":           "usd",
+			"timezone":           "america/new_york",
+			"dateFormat":         "mm/dd/yyyy",
+			"multiCurrency":      true,
+			"autoDetectLocation": true,
+			"maintenanceMode":    false,
+			"maintenanceMessage": "We're currently performing scheduled maintenance. We'll be back soon!",
 		},
 		"design": map[string]interface{}{
 			"colors": map[string]interface{}{
@@ -615,32 +653,32 @@ func getDefaultConfig() map[string]interface{} {
 				"dominantLight":      "#F5F5F5",
 			},
 			"typography": map[string]interface{}{
-				"headingFont":  "Inter",
-				"bodyFont":     "Inter",
-				"baseFontSize": "16",
-				"lineHeight":   "1.5",
+				"headingFont":   "Inter",
+				"bodyFont":      "Inter",
+				"baseFontSize":  "16",
+				"lineHeight":    "1.5",
 				"letterSpacing": "normal",
 			},
 			"layout": map[string]interface{}{
-				"borderRadius":    "0",
-				"containerWidth":  "1920",
-				"sectionSpacing":  "large",
+				"borderRadius":   "0",
+				"containerWidth": "1920",
+				"sectionSpacing": "large",
 			},
 			"animations": map[string]interface{}{
-				"enabled":     true,
-				"speed":       "normal",
+				"enabled":      true,
+				"speed":        "normal",
 				"hoverEffects": "subtle",
 			},
 		},
 		"homepage": map[string]interface{}{
 			"hero": map[string]interface{}{
-				"enabled":          true,
-				"heading":          "Timeless Elegance Redefined",
-				"subheading":       "Discover our curated collection of luxury fashion pieces",
+				"enabled":           true,
+				"heading":           "",
+				"subheading":        "",
 				"primaryButtonText": "Shop Collection",
 				"primaryButtonLink": "/shop",
-				"backgroundImage":  "",
-				"style":            "fullscreen",
+				"backgroundImage":   "",
+				"style":             "fullscreen",
 			},
 			"sections": map[string]interface{}{
 				"featuredProducts":  true,
@@ -658,21 +696,21 @@ func getDefaultConfig() map[string]interface{} {
 		},
 		"navigation": map[string]interface{}{
 			"header": map[string]interface{}{
-				"style":      "transparent",
-				"height":     "80",
-				"sticky":     true,
-				"showSearch": true,
+				"style":        "transparent",
+				"height":       "80",
+				"sticky":       true,
+				"showSearch":   true,
 				"showCurrency": true,
 			},
 			"megaMenu": map[string]interface{}{
 				"style": "compact",
 			},
 			"footer": map[string]interface{}{
-				"style":           "multi-column",
-				"showNewsletter":  true,
-				"showSocial":      true,
+				"style":            "multi-column",
+				"showNewsletter":   true,
+				"showSocial":       true,
 				"showPaymentIcons": true,
-				"copyrightText":   "© 2026 Rloco. All rights reserved.",
+				"copyrightText":    "© 2026 Rloco. All rights reserved.",
 			},
 		},
 		"categories": map[string]interface{}{
@@ -687,10 +725,10 @@ func getDefaultConfig() map[string]interface{} {
 		},
 		"email": map[string]interface{}{
 			"smtp": map[string]interface{}{
-				"host":     "smtp.sendgrid.net",
-				"port":     "587",
-				"username": "apikey",
-				"password": "",
+				"host":      "smtp.sendgrid.net",
+				"port":      "587",
+				"username":  "apikey",
+				"password":  "",
 				"fromEmail": "noreply@rloco.com",
 				"fromName":  "Rloco",
 			},
@@ -710,14 +748,14 @@ func getDefaultConfig() map[string]interface{} {
 		"seo": map[string]interface{}{
 			"meta": map[string]interface{}{
 				"title":        "Rloco - Modern Luxury Fashion",
-				"description":   "Shop curated luxury fashion at Rloco. Discover timeless pieces from the world's finest designers. Free shipping on orders over $100.",
+				"description":  "Shop curated luxury fashion at Rloco. Discover timeless pieces from the world's finest designers. Free shipping on orders over $100.",
 				"keywords":     "luxury fashion, designer clothing, high-end fashion, premium accessories",
 				"canonicalUrl": "https://rloco.com",
 			},
 			"openGraph": map[string]interface{}{
-				"title":         "Rloco - Modern Luxury Fashion",
-				"description":   "Discover curated luxury fashion collections at Rloco.",
-				"image":         "",
+				"title":           "Rloco - Modern Luxury Fashion",
+				"description":     "Discover curated luxury fashion collections at Rloco.",
+				"image":           "",
 				"twitterCardType": "summary_large",
 			},
 			"sitemap": map[string]interface{}{
@@ -731,27 +769,27 @@ func getDefaultConfig() map[string]interface{} {
 		},
 		"analytics": map[string]interface{}{
 			"googleAnalytics": map[string]interface{}{
-				"enabled":          true,
-				"measurementId":    "G-XXXXXXXXXX",
+				"enabled":           false,
+				"measurementId":     "",
 				"enhancedEcommerce": true,
-				"trackUserId":      true,
+				"trackUserId":       true,
 			},
 			"facebookPixel": map[string]interface{}{
-				"enabled": true,
-				"pixelId": "1234567890123456",
+				"enabled": false,
+				"pixelId": "",
 				"events": map[string]interface{}{
-					"pageView":        true,
-					"viewContent":     true,
-					"addToCart":       true,
+					"pageView":         true,
+					"viewContent":      true,
+					"addToCart":        true,
 					"initiateCheckout": true,
-					"purchase":        true,
+					"purchase":         true,
 				},
 			},
 			"other": map[string]interface{}{
-				"googleTagManager":  "",
-				"tiktokPixel":       "",
-				"pinterestTag":      "",
-				"hotjarSiteId":      "",
+				"googleTagManager":   "",
+				"tiktokPixel":        "",
+				"pinterestTag":       "",
+				"hotjarSiteId":       "",
 				"customHeaderScript": "",
 			},
 		},
@@ -763,6 +801,10 @@ func getDefaultConfig() map[string]interface{} {
 				"allowMultiple": true,
 				"maxBadges":     "2",
 			},
+		},
+		// Admin-only in DB; stripped from GET /api/config (not in filterPublicSiteConfig allowlist).
+		"vendorSubscriptions": map[string]interface{}{
+			"plans": []interface{}{},
 		},
 	}
 }
@@ -877,3 +919,37 @@ func (h *AdminHandler) GetPublicContent(c *gin.Context) {
 	c.JSON(http.StatusOK, content)
 }
 
+// GetCohortAnalytics returns user retention cohort data grouped by signup month.
+// GET /admin/analytics/cohort
+func (h *AdminHandler) GetCohortAnalytics(c *gin.Context) {
+	months := 6
+	data, err := h.advancedAnalyticsRepo.GetCohortData(c.Request.Context(), months)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cohorts": data, "months": months})
+}
+
+// GetFunnelAnalytics returns add-to-cart → checkout → purchase funnel counts.
+// GET /admin/analytics/funnel
+func (h *AdminHandler) GetFunnelAnalytics(c *gin.Context) {
+	endDate, startDate := parseDateRangeOrDays(c, 30)
+	data, err := h.advancedAnalyticsRepo.GetFunnelData(c.Request.Context(), startDate, endDate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"funnel": data, "start": startDate, "end": endDate})
+}
+
+// GetAdminProductRecommendations returns top co-purchased product pairs for admin insight.
+// GET /admin/analytics/recommendations
+func (h *AdminHandler) GetAdminProductRecommendations(c *gin.Context) {
+	pairs, err := h.advancedAnalyticsRepo.GetCoPurchasePairs(c.Request.Context(), 20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pairs": pairs})
+}

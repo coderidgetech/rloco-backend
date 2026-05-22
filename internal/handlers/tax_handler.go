@@ -10,20 +10,27 @@ import (
 )
 
 type TaxHandler struct {
-	taxService services.TaxService
+	taxService            services.TaxService
+	stripeUS              services.StripeUSTax
+	usFallbackTaxFraction float64 // same as ORDER_DEFAULT_TAX_RATE when Stripe/Mongo unavailable (e.g. preview)
 }
 
-func NewTaxHandler(taxService services.TaxService) *TaxHandler {
-	return &TaxHandler{taxService: taxService}
+func NewTaxHandler(taxService services.TaxService, stripeUS services.StripeUSTax, usFallbackTaxFraction float64) *TaxHandler {
+	if usFallbackTaxFraction < 0 {
+		usFallbackTaxFraction = 0
+	}
+	return &TaxHandler{taxService: taxService, stripeUS: stripeUS, usFallbackTaxFraction: usFallbackTaxFraction}
 }
 
 func (h *TaxHandler) Calculate(c *gin.Context) {
 	var req struct {
-		Country   string  `json:"country" binding:"required"`
-		State     *string `json:"state,omitempty"`
-		City      *string `json:"city,omitempty"`
-		PostalCode *string `json:"postal_code,omitempty"`
-		Subtotal  float64 `json:"subtotal" binding:"required"`
+		Country      string   `json:"country" binding:"required"`
+		State        *string  `json:"state,omitempty"`
+		City         *string  `json:"city,omitempty"`
+		PostalCode   *string  `json:"postal_code,omitempty"`
+		Subtotal     float64  `json:"subtotal" binding:"required"`
+		ShippingUSD  *float64 `json:"shipping_usd,omitempty"`
+		AddressLine1 *string  `json:"address_line1,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -44,8 +51,61 @@ func (h *TaxHandler) Calculate(c *gin.Context) {
 		postalCode = *req.PostalCode
 	}
 
+	if services.CountryLooksUS(req.Country) && h.stripeUS != nil {
+		shipUSD := 0.0
+		if req.ShippingUSD != nil && *req.ShippingUSD > 0 {
+			shipUSD = *req.ShippingUSD
+		}
+		addr := ""
+		if req.AddressLine1 != nil {
+			addr = *req.AddressLine1
+		}
+		taxAmount, err := h.stripeUS.Calculate(c.Request.Context(), req.Subtotal, shipUSD, models.ShippingInfo{
+			Address: addr,
+			City:    city,
+			State:   state,
+			ZipCode: postalCode,
+			Country: req.Country,
+		})
+		if err == nil {
+			effectivePct := 0.0
+			if req.Subtotal > 0 {
+				effectivePct = (taxAmount / req.Subtotal) * 100
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"tax_amount": taxAmount,
+				"rate": &models.TaxRate{
+					Country:  "United States",
+					State:    req.State,
+					City:     req.City,
+					Rate:     effectivePct,
+					TaxType:  "sales_tax_stripe",
+					IsActive: true,
+				},
+			})
+			return
+		}
+		// fall through to Mongo / defaults on Stripe errors (e.g. incomplete address)
+	}
+
 	taxAmount, rate, err := h.taxService.CalculateTax(c.Request.Context(), req.Country, state, city, postalCode, req.Subtotal)
 	if err != nil {
+		if services.CountryLooksUS(req.Country) && h.usFallbackTaxFraction >= 0 {
+			taxAmt := req.Subtotal * h.usFallbackTaxFraction
+			pct := h.usFallbackTaxFraction * 100
+			c.JSON(http.StatusOK, gin.H{
+				"tax_amount": taxAmt,
+				"rate": &models.TaxRate{
+					Country:  "United States",
+					State:    req.State,
+					City:     req.City,
+					Rate:     pct,
+					TaxType:  "sales_tax_estimate",
+					IsActive: true,
+				},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

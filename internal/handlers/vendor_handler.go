@@ -2,18 +2,21 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"rloco-backend/internal/middleware"
+	"rloco-backend/internal/repositories"
 	"rloco-backend/internal/services"
 )
 
 type VendorHandler struct {
-	vendorService services.VendorService
+	vendorService      services.VendorService
+	vendorAnalyticsRepo repositories.VendorAnalyticsRepository
 }
 
-func NewVendorHandler(vendorService services.VendorService) *VendorHandler {
-	return &VendorHandler{vendorService: vendorService}
+func NewVendorHandler(vendorService services.VendorService, vendorAnalyticsRepo repositories.VendorAnalyticsRepository) *VendorHandler {
+	return &VendorHandler{vendorService: vendorService, vendorAnalyticsRepo: vendorAnalyticsRepo}
 }
 
 // GetMe returns the vendor profile for the authenticated vendor user.
@@ -80,4 +83,77 @@ func (h *VendorHandler) UpdateMe(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, current)
+}
+
+func vendorDateRange(c *gin.Context) (time.Time, time.Time) {
+	days := 30
+	end := time.Now()
+	start := end.AddDate(0, 0, -days)
+	return start, end
+}
+
+// GetAnalyticsSummary returns lifetime totals for the authenticated vendor.
+// GET /vendor/analytics/summary
+func (h *VendorHandler) GetAnalyticsSummary(c *gin.Context) {
+	vid := middleware.GetVendorIDFromContext(c)
+	if vid == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No vendor profile for this account"})
+		return
+	}
+	summary, err := h.vendorAnalyticsRepo.GetVendorSummary(c.Request.Context(), *vid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// GetAnalyticsRevenue returns daily revenue series for the vendor.
+// GET /vendor/analytics/revenue
+func (h *VendorHandler) GetAnalyticsRevenue(c *gin.Context) {
+	vid := middleware.GetVendorIDFromContext(c)
+	if vid == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No vendor profile for this account"})
+		return
+	}
+	start, end := vendorDateRange(c)
+	data, err := h.vendorAnalyticsRepo.GetVendorRevenueSeries(c.Request.Context(), *vid, start, end)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": data, "start": start, "end": end})
+}
+
+// GetAnalyticsProducts returns top products for the vendor.
+// GET /vendor/analytics/products
+func (h *VendorHandler) GetAnalyticsProducts(c *gin.Context) {
+	vid := middleware.GetVendorIDFromContext(c)
+	if vid == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No vendor profile for this account"})
+		return
+	}
+	data, err := h.vendorAnalyticsRepo.GetVendorTopProducts(c.Request.Context(), *vid, 10)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+// GetAnalyticsOrders returns order status breakdown for the vendor.
+// GET /vendor/analytics/orders
+func (h *VendorHandler) GetAnalyticsOrders(c *gin.Context) {
+	vid := middleware.GetVendorIDFromContext(c)
+	if vid == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No vendor profile for this account"})
+		return
+	}
+	start, end := vendorDateRange(c)
+	data, err := h.vendorAnalyticsRepo.GetVendorOrderStats(c.Request.Context(), *vid, start, end)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, data)
 }

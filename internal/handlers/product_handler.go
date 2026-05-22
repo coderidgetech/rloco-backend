@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"rloco-backend/internal/models"
+	"rloco-backend/internal/repositories"
 	"rloco-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -14,14 +15,16 @@ import (
 )
 
 type ProductHandler struct {
-	productService services.ProductService
-	storageService services.StorageService
+	productService      services.ProductService
+	storageService      services.StorageService
+	advancedAnalyticsRepo repositories.AdvancedAnalyticsRepository
 }
 
-func NewProductHandler(productService services.ProductService, storageService services.StorageService) *ProductHandler {
+func NewProductHandler(productService services.ProductService, storageService services.StorageService, advancedAnalyticsRepo repositories.AdvancedAnalyticsRepository) *ProductHandler {
 	return &ProductHandler{
-		productService: productService,
-		storageService: storageService,
+		productService:      productService,
+		storageService:      storageService,
+		advancedAnalyticsRepo: advancedAnalyticsRepo,
 	}
 }
 
@@ -148,6 +151,9 @@ func (h *ProductHandler) List(c *gin.Context) {
 	}
 	if m := c.Query("market"); m == "IN" || m == "US" {
 		filter["market"] = m
+	}
+	if c.Query("deduplicate") == "true" {
+		filter["deduplicate"] = true
 	}
 
 	products, total, err := h.productService.List(c.Request.Context(), filter, limit, skip, sort)
@@ -527,14 +533,14 @@ func (h *ProductHandler) UploadImages(c *gin.Context) {
 	}
 
 	var files []*multipart.FileHeader
-	if mf, err := c.MultipartForm(); err == nil && mf != nil {
-		if v := mf.File["images"]; len(v) > 0 {
-			files = v
-		}
+	if parseErr := c.Request.ParseMultipartForm(32 << 20); parseErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse multipart form: " + parseErr.Error()})
+		return
 	}
-	if len(files) == 0 {
-		if fh, err := c.FormFile("file"); err == nil {
-			files = []*multipart.FileHeader{fh}
+	if mf := c.Request.MultipartForm; mf != nil {
+		// Accept any file field — covers "images", "file", or whatever the client sends
+		for _, fhs := range mf.File {
+			files = append(files, fhs...)
 		}
 	}
 	if len(files) == 0 {
@@ -579,4 +585,149 @@ func (h *ProductHandler) UploadImages(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Images uploaded", "images": urls})
+}
+
+
+// GetRecommendations returns products frequently bought alongside this product.
+// GET /products/:id/recommendations
+func (h *ProductHandler) GetRecommendations(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		return
+	}
+
+	recommendedIDs, err := h.advancedAnalyticsRepo.GetRecommendedForProduct(c.Request.Context(), id, 8)
+	if err != nil || len(recommendedIDs) == 0 {
+		// Fallback: return same-category products
+		product, ferr := h.productService.GetByID(c.Request.Context(), id)
+		if ferr != nil {
+			c.JSON(http.StatusOK, gin.H{"products": []interface{}{}})
+			return
+		}
+		filter := map[string]interface{}{"category": product.Category}
+		products, _, ferr := h.productService.List(c.Request.Context(), filter, 8, 0, "newest")
+		if ferr != nil {
+			c.JSON(http.StatusOK, gin.H{"products": []interface{}{}})
+			return
+		}
+		// exclude the requested product
+		var out []*models.Product
+		for _, p := range products {
+			if p.ID != id {
+				out = append(out, p)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"products": out})
+		return
+	}
+
+	var products []*models.Product
+	for _, pid := range recommendedIDs {
+		p, ferr := h.productService.GetByID(c.Request.Context(), pid)
+		if ferr == nil {
+			products = append(products, p)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"products": products})
+}
+
+// GetVariants returns all color variants sharing the same variant_group_id as the given product.
+func (h *ProductHandler) GetVariants(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product id"})
+		return
+	}
+	variants, err := h.productService.GetVariants(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"variants": variants})
+}
+
+// SetVariantGroup assigns a product to a variant group (admin/vendor only).
+// Body: { "variant_group_id": "<hex>", "color": "Navy", "is_main_variant": false }
+// Omit variant_group_id to create a new group.
+func (h *ProductHandler) SetVariantGroup(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product id"})
+		return
+	}
+	if !h.checkProductOwnership(c, id) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	var body struct {
+		VariantGroupID string `json:"variant_group_id"`
+		Color          string `json:"color"`
+		IsMainVariant  bool   `json:"is_main_variant"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.Color == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "color is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	if body.VariantGroupID == "" {
+		// Create a new group with this product as the main variant
+		groupID, err := h.productService.CreateVariantGroup(ctx, id, body.Color)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"variant_group_id": groupID.Hex()})
+		return
+	}
+
+	groupID, err := primitive.ObjectIDFromHex(body.VariantGroupID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid variant_group_id"})
+		return
+	}
+	if err := h.productService.SetVariantGroup(ctx, id, groupID, body.Color, body.IsMainVariant); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// UnsetVariantGroup removes a product from its variant group (admin/vendor only).
+func (h *ProductHandler) UnsetVariantGroup(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product id"})
+		return
+	}
+	if !h.checkProductOwnership(c, id) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+	if err := h.productService.UnsetVariantGroup(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// AutoSplitVariants runs the migration that splits multi-color products into variant siblings.
+// Admin only.
+func (h *ProductHandler) AutoSplitVariants(c *gin.Context) {
+	groups, variants, err := h.productService.AutoSplitVariants(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"groups_created":   groups,
+		"variants_created": variants,
+	})
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,6 +22,12 @@ type ProductService interface {
 	GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error)
 	GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error)
 	Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error)
+	// Variant group methods
+	GetVariants(ctx context.Context, productID primitive.ObjectID) ([]*models.Product, error)
+	SetVariantGroup(ctx context.Context, productID primitive.ObjectID, groupID primitive.ObjectID, color string, isMain bool) error
+	CreateVariantGroup(ctx context.Context, productID primitive.ObjectID, color string) (primitive.ObjectID, error)
+	UnsetVariantGroup(ctx context.Context, productID primitive.ObjectID) error
+	AutoSplitVariants(ctx context.Context) (int, int, error)
 }
 
 type productService struct {
@@ -102,6 +109,16 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 	if market, ok := filter["market"].(string); ok && (market == "IN" || market == "US") {
 		bsonFilter = repositories.MergeMarketFilter(bsonFilter, market)
 	}
+	// deduplicate=true → only return is_main_variant=true (or products with no group)
+	if dedupe, ok := filter["deduplicate"].(bool); ok && dedupe {
+		bsonFilter = bson.M{"$and": []bson.M{
+			bsonFilter,
+			{"$or": []bson.M{
+				{"variant_group_id": bson.M{"$exists": false}},
+				{"is_main_variant": true},
+			}},
+		}}
+	}
 
 	sortBSON := bson.M{}
 	if sort != "" {
@@ -139,5 +156,98 @@ func (s *productService) Search(ctx context.Context, query string, limit, skip i
 		return nil, 0, errors.New("search query cannot be empty")
 	}
 	return s.repo.Search(ctx, query, limit, skip, market)
+}
+
+func (s *productService) GetVariants(ctx context.Context, productID primitive.ObjectID) ([]*models.Product, error) {
+	product, err := s.repo.GetByID(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	if product.VariantGroupID == nil {
+		// No group — return just this product as a single-element slice
+		return []*models.Product{product}, nil
+	}
+	return s.repo.GetVariantsByGroupID(ctx, *product.VariantGroupID)
+}
+
+func (s *productService) SetVariantGroup(ctx context.Context, productID primitive.ObjectID, groupID primitive.ObjectID, color string, isMain bool) error {
+	return s.repo.SetVariantGroup(ctx, productID, groupID, color, isMain)
+}
+
+// CreateVariantGroup creates a new variant group for a product (becomes the main variant).
+func (s *productService) CreateVariantGroup(ctx context.Context, productID primitive.ObjectID, color string) (primitive.ObjectID, error) {
+	groupID := primitive.NewObjectID()
+	if err := s.repo.SetVariantGroup(ctx, productID, groupID, color, true); err != nil {
+		return primitive.NilObjectID, err
+	}
+	return groupID, nil
+}
+
+func (s *productService) UnsetVariantGroup(ctx context.Context, productID primitive.ObjectID) error {
+	return s.repo.UnsetVariantGroup(ctx, productID)
+}
+
+// AutoSplitVariants finds products with multiple colors and no variant_group_id,
+// then creates one variant product per extra color (copying all fields).
+// Returns (groupsCreated, variantsCreated, error).
+func (s *productService) AutoSplitVariants(ctx context.Context) (int, int, error) {
+	// Fetch all products that have >1 color and no variant_group_id yet
+	filter := map[string]interface{}{}
+	all, _, err := s.List(ctx, filter, 10000, 0, "newest")
+	if err != nil {
+		return 0, 0, err
+	}
+
+	groupsCreated := 0
+	variantsCreated := 0
+
+	for _, product := range all {
+		// Skip products already in a group or with ≤1 color
+		if product.VariantGroupID != nil || len(product.Colors) <= 1 {
+			continue
+		}
+
+		groupID := primitive.NewObjectID()
+
+		// Mark original product as main variant (first color)
+		if err := s.repo.SetVariantGroup(ctx, product.ID, groupID, product.Colors[0], true); err != nil {
+			return groupsCreated, variantsCreated, err
+		}
+		groupsCreated++
+
+		// Create a new product record for each additional color
+		newProducts := make([]*models.Product, 0, len(product.Colors)-1)
+		for i, color := range product.Colors[1:] {
+			clone := *product // shallow copy
+			clone.ID = primitive.NewObjectID()
+			clone.Color = color
+			clone.Colors = []string{color}
+			clone.IsMainVariant = false
+			clone.VariantGroupID = &groupID
+			clone.SKU = product.SKU + "-" + sanitizeSKU(color) + "-" + fmt.Sprintf("%d", i+2)
+			newProducts = append(newProducts, &clone)
+		}
+
+		if err := s.repo.BulkInsert(ctx, newProducts); err != nil {
+			return groupsCreated, variantsCreated, err
+		}
+		variantsCreated += len(newProducts)
+	}
+
+	return groupsCreated, variantsCreated, nil
+}
+
+func sanitizeSKU(s string) string {
+	result := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			result = append(result, c)
+		}
+	}
+	if len(result) > 6 {
+		result = result[:6]
+	}
+	return string(result)
 }
 

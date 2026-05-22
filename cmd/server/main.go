@@ -28,7 +28,7 @@ func main() {
 		log.Println("WARNING: Twilio Verify not configured; phone registration OTP disabled:", err)
 	}
 	if !cfg.EmailConfigReady() {
-		log.Println("WARNING: Email notifications are disabled. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD (or supported aliases) to enable delivery.")
+		log.Println("WARNING: Email notifications are disabled. Set RESEND_API_KEY and SMTP_FROM to enable delivery.")
 	}
 	if cfg.Env == "production" && strings.TrimSpace(cfg.CORSAllowedOrigins) == "" {
 		log.Fatal("CORS_ALLOWED_ORIGINS must be set in production (comma-separated allowed web origins)")
@@ -55,7 +55,7 @@ func main() {
 	reviewRepo := repositories.NewReviewRepository(db)
 	returnRepo := repositories.NewReturnRepository(db)
 	shippingRepo := repositories.NewShippingRepository(db)
-	taxRepo := repositories.NewTaxRepository(db)
+	taxRepo := repositories.NewTaxRepository(db, cfg.OrderIndiaDefaultGSTPercent)
 	supportRepo := repositories.NewSupportRepository(db)
 	paymentRepo := repositories.NewPaymentRepository(db)
 	stripeWebhookEventRepo := repositories.NewStripeWebhookEventRepository(db)
@@ -67,6 +67,10 @@ func main() {
 	phoneOTPRepo := repositories.NewPhoneOTPRepository(db)
 	newsletterRepo := repositories.NewNewsletterRepository(db)
 	trackingRepo := repositories.NewOrderTrackingRepository(db)
+	rewardsRepo := repositories.NewRewardsRepository(db)
+	vendorAnalyticsRepo := repositories.NewVendorAnalyticsRepository(db)
+	advancedAnalyticsRepo := repositories.NewAdvancedAnalyticsRepository(db)
+	vendorApplicationRepo := repositories.NewVendorApplicationRepository(db)
 
 	// Update middleware to use config
 	middleware.SetJWTSecret(cfg.JWTSecret)
@@ -74,8 +78,14 @@ func main() {
 	middleware.ConfigureErrorResponses(cfg.Env == "production")
 
 	// Initialize services
-	emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.SMTPFromName, cfg.AppBaseURL, cfg.AdminEmail)
+	emailService := services.NewEmailService(cfg.ResendAPIKey, cfg.SMTPFrom, cfg.SMTPFromName, cfg.AppBaseURL, cfg.AdminEmail)
 	twilioVerify := services.NewTwilioVerifyClient(cfg.TwilioAccountSid, cfg.TwilioAuthToken, cfg.TwilioVerifyServiceSid)
+	twilioSMSService := services.NewTwilioSMSService(cfg.TwilioAccountSid, cfg.TwilioAuthToken, cfg.TwilioPhoneNumber)
+	fcmService, err := services.NewFCMService(cfg.FCMServiceAccountJSON)
+	if err != nil {
+		log.Printf("Warning: FCM disabled — %v", err)
+		fcmService, _ = services.NewFCMService("") // fall back to no-op
+	}
 	authService := services.NewAuthService(
 		userRepo,
 		passwordResetRepo,
@@ -92,12 +102,20 @@ func main() {
 	shippoClient := services.NewShippoClient(cfg)
 	shippingService := services.NewShippingService(shippingRepo, shippoClient)
 	taxService := services.NewTaxService(taxRepo)
-	orderService := services.NewOrderService(orderRepo, trackingRepo, productRepo, promotionRepo, emailService, shippingService, taxService)
+	promotionService := services.NewPromotionService(promotionRepo)
+	orderCheckoutPricing := services.OrderCheckoutPricing{
+		DefaultShippingUSD:      cfg.OrderDefaultShippingUSD,
+		DefaultTaxRate:          cfg.OrderDefaultTaxRate,
+		FreeShippingSubtotalUSD: cfg.OrderFreeShippingSubtotalUSD,
+		INRPerUSD:               cfg.OrderINRPerUSD,
+	}
+	stripeUSTax := services.NewStripeUSTax(cfg.StripeSecretKey, cfg.StripeProductTaxCode)
+	orderService := services.NewOrderService(orderRepo, trackingRepo, productRepo, promotionRepo, promotionService, orderCheckoutPricing, emailService, shippingService, taxService, stripeUSTax, twilioSMSService, fcmService, userRepo, rewardsRepo)
 	newsletterService := services.NewNewsletterService(newsletterRepo)
 	cartService := services.NewCartService(cartRepo, productRepo)
 	wishlistService := services.NewWishlistService(wishlistRepo, productRepo)
-	promotionService := services.NewPromotionService(promotionRepo)
 	vendorService := services.NewVendorService(vendorRepo, userRepo, emailService, cfg.AppBaseURL)
+	vendorApplicationService := services.NewVendorApplicationService(vendorApplicationRepo, vendorService, emailService, cfg.AppBaseURL)
 	analyticsService := services.NewAnalyticsService(analyticsRepo, orderRepo, productRepo)
 	configService := services.NewConfigService(configRepo)
 	storageService := services.NewStorageService(cfg.StorageType, cfg.StorageEndpoint, cfg.StorageAccessKey, cfg.StorageSecretKey, cfg.StorageBucket, cfg.StoragePublicURL)
@@ -111,7 +129,7 @@ func main() {
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.GoogleClientID, cfg.GoogleMapsBrowserKey)
-	productHandler := handlers.NewProductHandler(productService, storageService)
+	productHandler := handlers.NewProductHandler(productService, storageService, advancedAnalyticsRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	orderHandler := handlers.NewOrderHandler(orderService, productService, orderIdempotencyRepo)
 	cartHandler := handlers.NewCartHandler(cartService)
@@ -125,21 +143,24 @@ func main() {
 		promotionService,
 		analyticsService,
 		configService,
+		advancedAnalyticsRepo,
 	)
 	uploadHandler := handlers.NewUploadHandler(storageService)
 	reviewHandler := handlers.NewReviewHandler(reviewService, productRepo)
 	returnHandler := handlers.NewReturnHandler(returnService)
 	shippingHandler := handlers.NewShippingHandler(shippingService)
-	taxHandler := handlers.NewTaxHandler(taxService)
+	taxHandler := handlers.NewTaxHandler(taxService, stripeUSTax, cfg.OrderDefaultTaxRate)
 	inventoryHandler := handlers.NewInventoryHandler(inventoryService)
 	supportHandler := handlers.NewSupportHandler(supportService)
 	paymentHandler := handlers.NewPaymentHandler(paymentService)
 	videoHandler := handlers.NewVideoHandler(videoService)
 	addressHandler := handlers.NewAddressHandler(addressService)
-	rewardsHandler := handlers.NewRewardsHandler(orderRepo)
+	rewardsHandler := handlers.NewRewardsHandler(orderRepo, rewardsRepo)
 	newsletterHandler := handlers.NewNewsletterHandler(newsletterService)
 	contactHandler := handlers.NewContactHandler(emailService)
-	vendorHandler := handlers.NewVendorHandler(vendorService)
+	vendorHandler := handlers.NewVendorHandler(vendorService, vendorAnalyticsRepo)
+	notificationHandler := handlers.NewNotificationHandler(userRepo)
+	vendorApplicationHandler := handlers.NewVendorApplicationHandler(vendorApplicationService)
 
 	// Setup router
 	if cfg.Env == "production" {
@@ -203,6 +224,15 @@ func main() {
 			auth.POST("/deactivate", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.DeactivateAccount)
 		}
 
+		// Notifications (FCM device token registration)
+		notificationsG := api.Group("/notifications")
+		notificationsG.Use(middleware.AuthRequired())
+		notificationsG.Use(middleware.LoadUserMiddleware(userRepo))
+		{
+			notificationsG.POST("/device-token", notificationHandler.RegisterDeviceToken)
+			notificationsG.DELETE("/device-token", notificationHandler.RemoveDeviceToken)
+		}
+
 		// Products (specific paths MUST be before /:id to avoid "featured" matching as id)
 		products := api.Group("/products")
 		{
@@ -211,8 +241,12 @@ func main() {
 			products.GET("/new-arrivals", productHandler.GetNewArrivals)
 			products.GET("/on-sale", productHandler.GetOnSale)
 			products.GET("/:id", productHandler.Get)
+			products.GET("/:id/recommendations", productHandler.GetRecommendations)
+			products.GET("/:id/variants", productHandler.GetVariants)
 			products.POST("", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), productHandler.Create)
 			products.PUT("/:id", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), productHandler.Update)
+			products.PUT("/:id/variant-group", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), productHandler.SetVariantGroup)
+			products.DELETE("/:id/variant-group", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), productHandler.UnsetVariantGroup)
 			products.DELETE("/:id", middleware.AuthRequired(), middleware.RequireRole("admin"), productHandler.Delete)
 			products.POST("/:id/images", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), productHandler.UploadImages)
 		}
@@ -258,6 +292,7 @@ func main() {
 		}
 
 		api.POST("/contact", contactHandler.Submit)
+		api.POST("/vendor/apply", vendorApplicationHandler.Submit)
 
 		// Orders
 		orders := api.Group("/orders")
@@ -371,21 +406,25 @@ func main() {
 			addresses.PUT("/:id/default", addressHandler.SetDefault)
 		}
 
-		// Rewards summary (authenticated — derived from order history)
+		// Rewards (authenticated)
 		rewardsG := api.Group("/rewards")
 		rewardsG.Use(middleware.AuthRequired())
 		rewardsG.Use(middleware.LoadUserMiddleware(userRepo))
 		{
 			rewardsG.GET("/summary", rewardsHandler.GetSummary)
+			rewardsG.POST("/redeem", rewardsHandler.RedeemPoints)
+			rewardsG.GET("/transactions", rewardsHandler.GetTransactions)
 		}
 
 		// Public Configuration & Content (no auth required)
 		api.GET("/config", adminHandler.GetPublicConfig)
 		api.GET("/content", adminHandler.GetPublicContent)
 
-		// Upload
+		// Upload (staff only — arbitrary authenticated users must not fill object storage)
 		upload := api.Group("/upload")
 		upload.Use(middleware.AuthRequired())
+		upload.Use(middleware.LoadUserMiddleware(userRepo))
+		upload.Use(middleware.RequireRole("admin", "vendor"))
 		{
 			upload.POST("", uploadHandler.Upload)
 			upload.DELETE("/:filename", uploadHandler.Delete)
@@ -399,6 +438,10 @@ func main() {
 		{
 			vendorSelf.GET("/me", vendorHandler.GetMe)
 			vendorSelf.PUT("/me", vendorHandler.UpdateMe)
+			vendorSelf.GET("/analytics/summary", vendorHandler.GetAnalyticsSummary)
+			vendorSelf.GET("/analytics/revenue", vendorHandler.GetAnalyticsRevenue)
+			vendorSelf.GET("/analytics/products", vendorHandler.GetAnalyticsProducts)
+			vendorSelf.GET("/analytics/orders", vendorHandler.GetAnalyticsOrders)
 		}
 
 		// Admin routes (admin + vendor; sensitive routes require admin only)
@@ -419,6 +462,11 @@ func main() {
 			admin.PUT("/customers/:id", middleware.RequireRole("admin"), adminHandler.UpdateCustomer)
 
 			// Vendors
+			admin.GET("/vendor-applications", middleware.RequireRole("admin"), vendorApplicationHandler.List)
+			admin.GET("/vendor-applications/:id", middleware.RequireRole("admin"), vendorApplicationHandler.GetOne)
+			admin.POST("/vendor-applications/:id/approve", middleware.RequireRole("admin"), vendorApplicationHandler.Approve)
+			admin.POST("/vendor-applications/:id/reject", middleware.RequireRole("admin"), vendorApplicationHandler.Reject)
+
 			admin.GET("/vendors", middleware.RequireRole("admin"), adminHandler.ListVendors)
 			admin.GET("/vendors/:id", middleware.RequireRole("admin"), adminHandler.GetVendor)
 			admin.POST("/vendors", middleware.RequireRole("admin"), adminHandler.CreateVendor)
@@ -438,6 +486,12 @@ func main() {
 			admin.GET("/analytics/products", middleware.RequireRole("admin"), adminHandler.GetProductAnalytics)
 			admin.GET("/analytics/customers", middleware.RequireRole("admin"), adminHandler.GetCustomerAnalytics)
 			admin.GET("/analytics/traffic", middleware.RequireRole("admin"), adminHandler.GetTrafficAnalytics)
+			admin.GET("/analytics/cohort", middleware.RequireRole("admin"), adminHandler.GetCohortAnalytics)
+			admin.GET("/analytics/funnel", middleware.RequireRole("admin"), adminHandler.GetFunnelAnalytics)
+			admin.GET("/analytics/recommendations", middleware.RequireRole("admin"), adminHandler.GetAdminProductRecommendations)
+
+			// Variant migration
+			admin.POST("/products/migrate-variants", middleware.RequireRole("admin"), productHandler.AutoSplitVariants)
 
 			// Content
 			admin.GET("/content", middleware.RequireRole("admin"), adminHandler.GetContent)
@@ -451,8 +505,8 @@ func main() {
 			admin.GET("/configuration", middleware.RequireRole("admin"), adminHandler.GetConfiguration)
 			admin.PUT("/configuration", middleware.RequireRole("admin"), adminHandler.UpdateConfiguration)
 
-			// Reviews
-			admin.GET("/reviews", reviewHandler.List)
+			// Reviews (moderation queue — admin only)
+			admin.GET("/reviews", middleware.RequireRole("admin"), reviewHandler.List)
 			admin.PUT("/reviews/:id/status", middleware.RequireRole("admin"), reviewHandler.UpdateStatus)
 
 			// Returns

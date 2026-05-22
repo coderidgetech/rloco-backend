@@ -28,25 +28,47 @@ type OrderService interface {
 	GetStats(ctx context.Context, startDate, endDate time.Time) (map[string]interface{}, error)
 }
 
-type orderService struct {
-	orderRepo       repositories.OrderRepository
-	trackingRepo    repositories.OrderTrackingRepository
-	productRepo     repositories.ProductRepository
-	promotionRepo   repositories.PromotionRepository
-	emailService    EmailService
-	shippingService ShippingService
-	taxService      TaxService
+// OrderCheckoutPricing holds env-driven defaults for order totals (see config.Config ORDER_* vars).
+type OrderCheckoutPricing struct {
+	DefaultShippingUSD      float64
+	DefaultTaxRate          float64
+	FreeShippingSubtotalUSD float64
+	INRPerUSD               float64
 }
 
-func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo repositories.OrderTrackingRepository, productRepo repositories.ProductRepository, promotionRepo repositories.PromotionRepository, emailService EmailService, shippingService ShippingService, taxService TaxService) OrderService {
+type orderService struct {
+	orderRepo        repositories.OrderRepository
+	trackingRepo     repositories.OrderTrackingRepository
+	productRepo      repositories.ProductRepository
+	promotionRepo    repositories.PromotionRepository
+	promotionService PromotionService
+	checkoutPricing  OrderCheckoutPricing
+	emailService     EmailService
+	shippingService  ShippingService
+	taxService       TaxService
+	stripeUS         StripeUSTax // optional; US sales tax via Stripe Tax when set
+	smsService       *TwilioSMSService
+	fcmService       *FCMService
+	userRepo         repositories.UserRepository
+	rewardsRepo      repositories.RewardsRepository
+}
+
+func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo repositories.OrderTrackingRepository, productRepo repositories.ProductRepository, promotionRepo repositories.PromotionRepository, promotionService PromotionService, checkoutPricing OrderCheckoutPricing, emailService EmailService, shippingService ShippingService, taxService TaxService, stripeUS StripeUSTax, smsService *TwilioSMSService, fcmService *FCMService, userRepo repositories.UserRepository, rewardsRepo repositories.RewardsRepository) OrderService {
 	return &orderService{
-		orderRepo:       orderRepo,
-		trackingRepo:    trackingRepo,
-		productRepo:     productRepo,
-		promotionRepo:   promotionRepo,
-		emailService:    emailService,
-		shippingService: shippingService,
-		taxService:      taxService,
+		orderRepo:        orderRepo,
+		trackingRepo:     trackingRepo,
+		productRepo:      productRepo,
+		promotionRepo:    promotionRepo,
+		promotionService: promotionService,
+		checkoutPricing:  checkoutPricing,
+		emailService:     emailService,
+		shippingService:  shippingService,
+		taxService:       taxService,
+		stripeUS:         stripeUS,
+		smsService:       smsService,
+		fcmService:       fcmService,
+		userRepo:         userRepo,
+		rewardsRepo:      rewardsRepo,
 	}
 }
 
@@ -104,32 +126,33 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	}
 	weightPtr := orderWeightLb
 
-	// Apply promotion if provided (usage incremented only after order persists)
+	// Apply promotion if provided — same rules as POST /promotions/validate (usage limits, dates, min purchase)
 	var discount float64
 	var appliedPromotionID *primitive.ObjectID
-	if promotionCode != nil && *promotionCode != "" {
-		promotion, err := s.promotionRepo.GetByCode(ctx, *promotionCode)
-		if err == nil && promotion.IsActive {
-			now := time.Now()
-			if now.After(promotion.StartDate) && now.Before(promotion.EndDate) {
-				if promotion.MinPurchase == nil || subtotal >= *promotion.MinPurchase {
-					if promotion.Type == "percentage" {
-						discount = subtotal * (promotion.Value / 100)
-						if promotion.MaxDiscount != nil && discount > *promotion.MaxDiscount {
-							discount = *promotion.MaxDiscount
-						}
-					} else if promotion.Type == "fixed" {
-						discount = promotion.Value
-					}
-					pid := promotion.ID
-					appliedPromotionID = &pid
-				}
-			}
+	var promoFreeShipping bool
+	if promotionCode != nil && strings.TrimSpace(*promotionCode) != "" {
+		code := strings.TrimSpace(*promotionCode)
+		promotion, d, err := s.promotionService.Validate(ctx, code, subtotal)
+		if err != nil {
+			return nil, err
 		}
+		discount = d
+		if promotion.Type == "free_shipping" {
+			promoFreeShipping = true
+		}
+		pid := promotion.ID
+		appliedPromotionID = &pid
 	}
 
 	// Calculate shipping using shipping service
-	shippingCost := 15.0 // Default
+	shippingCost := s.checkoutPricing.DefaultShippingUSD
+	if shippingCost < 0 {
+		shippingCost = 0
+	}
+	inrPer := s.checkoutPricing.INRPerUSD
+	if inrPer <= 0 {
+		inrPer = 75
+	}
 	if s.shippingService != nil {
 		methods, err := s.shippingService.CalculateShipping(ctx, ShippingQuoteRequest{
 			Country:    shippingInfo.Country,
@@ -146,23 +169,48 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		})
 		if err == nil && len(methods) > 0 {
 			// Orders are still stored in USD internally, so normalize INR quotes.
-			shippingCost = normalizeShippingCostUSD(methods[0].BaseCost, methods[0].Currency)
+			shippingCost = normalizeShippingCostUSD(methods[0].BaseCost, methods[0].Currency, inrPer)
 		}
 	}
 
-	// Apply free shipping promotions
-	if subtotal > 200 {
+	// Apply free shipping (subtotal threshold + free_shipping promotion type from Validate)
+	freeShipThreshold := s.checkoutPricing.FreeShippingSubtotalUSD
+	if freeShipThreshold < 0 {
+		freeShipThreshold = 0
+	}
+	if subtotal > freeShipThreshold {
 		shippingCost = 0
 	}
-	if promotionCode != nil && *promotionCode == "FREESHIP" {
+	if promoFreeShipping {
 		shippingCost = 0
 	}
 
-	// Calculate tax using tax service
-	tax := (subtotal - discount) * 0.08 // Default 8%
-	if s.taxService != nil {
-		calculatedTax, _, err := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, subtotal-discount)
-		if err == nil {
+	// Tax: Stripe Tax for US; Mongo-configured GST (or ORDER_INDIA_DEFAULT_GST_PERCENT) for India.
+	taxable := subtotal - discount
+	if taxable < 0 {
+		taxable = 0
+	}
+	taxRate := s.checkoutPricing.DefaultTaxRate
+	if taxRate < 0 {
+		taxRate = 0
+	}
+	tax := taxable * taxRate
+	if orderMarket == "US" {
+		if s.stripeUS != nil {
+			if t, err := s.stripeUS.Calculate(ctx, taxable, shippingCost, shippingInfo); err == nil {
+				tax = t
+			} else if s.taxService != nil {
+				if calculatedTax, _, err := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, taxable); err == nil {
+					tax = calculatedTax
+				}
+			}
+		} else if s.taxService != nil {
+			if calculatedTax, _, err := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, taxable); err == nil {
+				tax = calculatedTax
+			}
+		}
+	} else if s.taxService != nil {
+		if calculatedTax, _, err := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, taxable); err == nil {
 			tax = calculatedTax
 		}
 	}
@@ -225,7 +273,7 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	// Non-COD: order stays status=pending, payment_status=pending until Stripe webhook or /payments/process.
 	// COD: same defaults; ops may mark paid on delivery via admin flows.
 
-	// Send order confirmation email (async)
+	// Send order confirmation notifications (async)
 	go func() {
 		orderData := map[string]interface{}{
 			"total": order.Total,
@@ -233,6 +281,32 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		_ = s.emailService.SendOrderConfirmation(order.ShippingInfo.Email, order.OrderNumber, orderData)
 		totalDisplay := fmt.Sprintf("$%.2f", order.Total)
 		_ = s.emailService.SendNewOrderAlert(order.OrderNumber, totalDisplay, order.ShippingInfo.Email)
+		if s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
+			_ = s.smsService.SendOrderConfirmation(context.Background(), order.ShippingInfo.Phone, order.OrderNumber)
+		}
+		if s.fcmService != nil && s.fcmService.Enabled() && s.userRepo != nil {
+			if u, err := s.userRepo.GetByID(context.Background(), order.UserID); err == nil && len(u.FCMTokens) > 0 {
+				_ = s.fcmService.SendToTokens(context.Background(), u.FCMTokens, "Order Confirmed", "Your order "+order.OrderNumber+" has been confirmed!", map[string]string{"order_id": order.ID.Hex()})
+			}
+		}
+	}()
+
+	// Credit earned reward points (1 pt per $1 of order total, async)
+	go func() {
+		if s.rewardsRepo != nil {
+			pts := int64(order.Total)
+			if pts > 0 {
+				tx := &models.RewardsTransaction{
+					UserID:      order.UserID,
+					Type:        "earned",
+					Points:      pts,
+					Reference:   order.ID.Hex(),
+					Description: "Points earned for order " + order.OrderNumber,
+					CreatedAt:   time.Now(),
+				}
+				_ = s.rewardsRepo.AddTransaction(context.Background(), tx)
+			}
+		}
 	}()
 
 	return order, nil
@@ -280,10 +354,14 @@ func productOrderableInMarket(p *models.Product, market string) bool {
 	return false
 }
 
-func normalizeShippingCostUSD(amount float64, currency string) float64 {
-	switch currency {
-	case "INR", "inr":
-		return amount / 75
+// normalizeShippingCostUSD converts quoted shipping to USD when the carrier returns INR.
+func normalizeShippingCostUSD(amount float64, currency string, inrPerUSD float64) float64 {
+	if inrPerUSD <= 0 {
+		inrPerUSD = 75
+	}
+	switch strings.ToUpper(strings.TrimSpace(currency)) {
+	case "INR":
+		return amount / inrPerUSD
 	default:
 		return amount
 	}
@@ -312,12 +390,30 @@ func (s *orderService) UpdateStatus(ctx context.Context, id primitive.ObjectID, 
 		return err
 	}
 
-	// Send email notifications for status changes
+	// Send notifications for status changes (async)
 	go func() {
 		if status == "shipped" && order.TrackingNumber != nil {
 			_ = s.emailService.SendShippingNotification(order.ShippingInfo.Email, order.OrderNumber, *order.TrackingNumber)
+			if s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
+				_ = s.smsService.SendShippingNotification(context.Background(), order.ShippingInfo.Phone, order.OrderNumber, *order.TrackingNumber)
+			}
 		} else if status != oldStatus {
 			_ = s.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order.OrderNumber, status)
+			if status == "delivered" && s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
+				_ = s.smsService.SendOrderDelivered(context.Background(), order.ShippingInfo.Phone, order.OrderNumber)
+			}
+		}
+		if s.fcmService != nil && s.fcmService.Enabled() && s.userRepo != nil && status != oldStatus {
+			titleMap := map[string]string{
+				"shipped":   "Your Order Has Shipped",
+				"delivered": "Your Order Was Delivered",
+				"cancelled": "Order Cancelled",
+			}
+			if title, ok := titleMap[status]; ok {
+				if u, err := s.userRepo.GetByID(context.Background(), order.UserID); err == nil && len(u.FCMTokens) > 0 {
+					_ = s.fcmService.SendToTokens(context.Background(), u.FCMTokens, title, "Order "+order.OrderNumber, map[string]string{"order_id": order.ID.Hex(), "status": status})
+				}
+			}
 		}
 	}()
 

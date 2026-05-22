@@ -1,4 +1,4 @@
-.PHONY: build run test clean docker-up docker-down seed
+.PHONY: build run test clean docker-up docker-down seed seed-demo
 
 build:
 	go build -o bin/server ./cmd/server
@@ -27,6 +27,9 @@ docker-build:
 
 seed:
 	go run migrations/seed.go
+
+seed-demo:
+	go run migrations/seed_demo.go
 
 tidy:
 	go mod tidy

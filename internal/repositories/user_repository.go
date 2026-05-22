@@ -21,6 +21,8 @@ type UserRepository interface {
 	Update(ctx context.Context, id primitive.ObjectID, user *models.User) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	List(ctx context.Context, limit, skip int) ([]*models.User, error)
+	AddFCMToken(ctx context.Context, userID primitive.ObjectID, token string) error
+	RemoveFCMToken(ctx context.Context, userID primitive.ObjectID, token string) error
 }
 
 type userRepository struct {
@@ -144,5 +146,32 @@ func (r *userRepository) List(ctx context.Context, limit, skip int) ([]*models.U
 		return nil, err
 	}
 	return users, nil
+}
+
+// AddFCMToken adds a device token to the user's fcm_tokens list (max 5, deduplicating).
+func (r *userRepository) AddFCMToken(ctx context.Context, userID primitive.ObjectID, token string) error {
+	// $addToSet prevents duplicates; slice trimming to 5 is handled via $push with $slice
+	_, err := r.collection.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{
+			"$push": bson.M{
+				"fcm_tokens": bson.M{
+					"$each":     []string{token},
+					"$slice":    -5, // keep the 5 most recent
+					"$position": 0,
+				},
+			},
+		},
+	)
+	return err
+}
+
+// RemoveFCMToken removes a device token from the user's fcm_tokens list.
+func (r *userRepository) RemoveFCMToken(ctx context.Context, userID primitive.ObjectID, token string) error {
+	_, err := r.collection.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$pull": bson.M{"fcm_tokens": token}},
+	)
+	return err
 }
 

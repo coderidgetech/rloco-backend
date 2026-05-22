@@ -1,11 +1,14 @@
 package services
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log"
-	"net/smtp"
+	"net/http"
 	"strings"
 	"unicode"
 )
@@ -23,62 +26,73 @@ type EmailService interface {
 	SendNewOrderAlert(orderNumber, totalDisplay, customerEmail string) error
 	SendVendorPortalCredentials(to, vendorName, loginURL, temporaryPassword string) error
 	SendContactInquiry(name, fromEmail, phone, subject, message string) error
+	SendVendorApplicationReceived(to, businessName string) error
+	SendVendorApplicationApproved(to, businessName, loginURL, tempPassword string) error
+	SendVendorApplicationRejected(to, businessName, reason string) error
 }
 
 type emailService struct {
-	smtpHost     string
-	smtpPort     string
-	smtpUser     string
-	smtpPassword string
+	resendAPIKey string
 	fromEmail    string
 	fromName     string
 	baseURL      string
 	adminEmail   string
 }
 
-func NewEmailService(smtpHost, smtpPort, smtpUser, smtpPassword, fromEmail, fromName, baseURL, adminEmail string) EmailService {
+func NewEmailService(resendAPIKey, fromEmail, fromName, baseURL, adminEmail string) EmailService {
 	return &emailService{
-		smtpHost:     smtpHost,
-		smtpPort:     smtpPort,
-		smtpUser:     smtpUser,
-		smtpPassword: smtpPassword,
-		fromEmail:    fromEmail,
-		fromName:     fromName,
-		baseURL:      strings.TrimSuffix(baseURL, "/"),
+		resendAPIKey: strings.TrimSpace(resendAPIKey),
+		fromEmail:    strings.TrimSpace(fromEmail),
+		fromName:     strings.TrimSpace(fromName),
+		baseURL:      strings.TrimSuffix(strings.TrimSpace(baseURL), "/"),
 		adminEmail:   strings.TrimSpace(adminEmail),
 	}
 }
 
 func (s *emailService) Configured() bool {
-	return strings.TrimSpace(s.smtpHost) != "" &&
-		strings.TrimSpace(s.smtpPort) != "" &&
-		strings.TrimSpace(s.smtpUser) != "" &&
-		strings.TrimSpace(s.smtpPassword) != "" &&
-		strings.TrimSpace(s.fromEmail) != ""
+	return s.resendAPIKey != "" && s.fromEmail != ""
+}
+
+type resendSendRequest struct {
+	From    string   `json:"from"`
+	To      []string `json:"to"`
+	Subject string   `json:"subject"`
+	Html    string   `json:"html"`
 }
 
 func (s *emailService) sendEmail(to, subject, body string) error {
-	if strings.TrimSpace(s.smtpHost) == "" ||
-		strings.TrimSpace(s.smtpPort) == "" ||
-		strings.TrimSpace(s.smtpUser) == "" ||
-		strings.TrimSpace(s.smtpPassword) == "" {
-		log.Printf("[Email] Not configured (need SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD): would send to %s: %s", to, subject)
+	if !s.Configured() {
+		log.Printf("[Email] Not configured (need RESEND_API_KEY + SMTP_FROM): would send to %s: %s", to, subject)
 		return nil
 	}
-
-	auth := smtp.PlainAuth("", s.smtpUser, s.smtpPassword, s.smtpHost)
-
-	msg := []byte(fmt.Sprintf("To: %s\r\n"+
-		"From: %s <%s>\r\n"+
-		"Subject: %s\r\n"+
-		"MIME-Version: 1.0\r\n"+
-		"Content-Type: text/html; charset=UTF-8\r\n"+
-		"\r\n"+
-		"%s\r\n", to, s.fromName, s.fromEmail, subject, body))
-
-	addr := fmt.Sprintf("%s:%s", s.smtpHost, s.smtpPort)
-	err := smtp.SendMail(addr, auth, s.fromEmail, []string{to}, msg)
+	from := s.fromEmail
+	if s.fromName != "" {
+		from = fmt.Sprintf("%s <%s>", s.fromName, s.fromEmail)
+	}
+	payload, err := json.Marshal(resendSendRequest{
+		From:    from,
+		To:      []string{to},
+		Subject: subject,
+		Html:    body,
+	})
 	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.resend.com/emails", bytes.NewBuffer(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.resendAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[Email] Resend request failed to %s: %v", to, err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		err = fmt.Errorf("resend API %d: %s", resp.StatusCode, string(b))
 		log.Printf("[Email] Send failed to %s: %v", to, err)
 		return err
 	}
@@ -336,6 +350,53 @@ func (s *emailService) SendVendorPortalCredentials(to, vendorName, loginURL, tem
 		emailMutedNote("Never share this email. R-Loko staff will never ask for your password by phone or message.")
 	return s.sendEmail(to, "Your R-Loko vendor portal is ready",
 		rlokoEmailShell("Vendor portal — R-Loko", "Your vendor portal is ready", body))
+}
+
+func (s *emailService) SendVendorApplicationReceived(to, businessName string) error {
+	if !s.Configured() {
+		return nil
+	}
+	bn := html.EscapeString(businessName)
+	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Hi %s,</p>
+<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Thank you for applying to sell on R-Loko. We've received your application and our team will review it shortly.</p>
+<p style="margin:0;font-size:15px;line-height:1.65;color:#5c5650;">We'll send you another email once a decision has been made — usually within 2–3 business days.</p>`, bn)
+	return s.sendEmail(to, "We received your vendor application — R-Loko",
+		rlokoEmailShell("Vendor Application", "Application received", emailTextBlockRow(body)))
+}
+
+func (s *emailService) SendVendorApplicationApproved(to, businessName, loginURL, tempPassword string) error {
+	if !s.Configured() {
+		return nil
+	}
+	bn := html.EscapeString(businessName)
+	var credBlock string
+	if tempPassword != "" {
+		pw := html.EscapeString(tempPassword)
+		credBlock = fmt.Sprintf(`<p style="margin:0 0 8px;font-size:15px;line-height:1.65;color:#5c5650;">Sign in with your email and the temporary password below, then change it from your vendor settings.</p>
+<p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#5c5650;"><strong>Temporary password:</strong> <code style="background:#f5f3f0;padding:2px 6px;border-radius:3px;">%s</code></p>`, pw)
+	} else {
+		credBlock = `<p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#5c5650;">Sign in using your existing account credentials.</p>`
+	}
+	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Congratulations! Your application for <strong>%s</strong> has been <strong style="color:#2c7a4b;">approved</strong>.</p>%s`, bn, credBlock)
+	return s.sendEmail(to, "Your R-Loko vendor application was approved 🎉",
+		rlokoEmailShell("Vendor Approved", "Welcome to R-Loko",
+			emailTextBlockRow(body)+emailButtonRow(loginURL, "Open vendor portal")))
+}
+
+func (s *emailService) SendVendorApplicationRejected(to, businessName, reason string) error {
+	if !s.Configured() {
+		return nil
+	}
+	bn := html.EscapeString(businessName)
+	reasonRow := ""
+	if reason != "" {
+		reasonRow = fmt.Sprintf(`<p style="margin:16px 0 0;font-size:15px;line-height:1.65;color:#5c5650;"><strong>Reason:</strong> %s</p>`, html.EscapeString(reason))
+	}
+	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Thank you for your interest in selling on R-Loko.</p>
+<p style="margin:0;font-size:15px;line-height:1.65;color:#5c5650;">After reviewing your application for <strong>%s</strong>, we're unable to approve it at this time.%s</p>
+<p style="margin:16px 0 0;font-size:15px;line-height:1.65;color:#5c5650;">You're welcome to apply again in the future if your circumstances change.</p>`, bn, reasonRow)
+	return s.sendEmail(to, "Update on your R-Loko vendor application",
+		rlokoEmailShell("Vendor Application", "Application update", emailTextBlockRow(body)))
 }
 
 func (s *emailService) SendContactInquiry(name, fromEmail, phone, subject, message string) error {

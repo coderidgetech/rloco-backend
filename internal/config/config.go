@@ -24,12 +24,9 @@ type Config struct {
 	StorageSecretKey    string
 	StorageBucket       string
 	StoragePublicURL    string // optional; for S3/R2 public bucket URL (e.g. https://pub-xxx.r2.dev)
-	SMTPHost            string
-	SMTPPort            string
-	SMTPUser            string
-	SMTPPassword        string
-	SMTPFrom            string
-	SMTPFromName        string
+	ResendAPIKey        string // Resend API key (re_...) for transactional email
+	SMTPFrom            string // sender address (SMTP_FROM env); also used as From: in Resend
+	SMTPFromName        string // sender display name
 	AppBaseURL          string // e.g. https://yoursite.com for verification/reset links
 	AdminEmail          string // optional; new order alerts sent here
 	StripeSecretKey     string
@@ -57,8 +54,21 @@ type Config struct {
 	TwilioAccountSid       string
 	TwilioAuthToken        string
 	TwilioVerifyServiceSid string // Verify Service SID (VA...)
+	// Twilio Programmable Messaging — for transactional SMS (order confirmations etc.)
+	TwilioPhoneNumber string
+	// FCM — Firebase Cloud Messaging via HTTP v1 API (service account JSON)
+	FCMServiceAccountJSON string
 	// APIRateLimitRPM is max HTTP API requests per client IP per minute (global limiter, production only).
 	APIRateLimitRPM int
+	// Order checkout defaults (orders store totals in USD; INR shipping quotes convert using OrderINRPerUSD).
+	OrderDefaultShippingUSD        float64
+	OrderDefaultTaxRate            float64
+	OrderFreeShippingSubtotalUSD   float64
+	OrderINRPerUSD                 float64
+	// OrderIndiaDefaultGSTPercent is the GST % applied when no Mongo tax_rates row matches India (e.g. 18 for 18%).
+	OrderIndiaDefaultGSTPercent float64
+	// StripeProductTaxCode optional Stripe Tax Code id (txcd_...) for US merchandise line items; empty uses Dashboard default.
+	StripeProductTaxCode string
 }
 
 // ValidateTwilioVerify returns an error if Twilio Verify env is incomplete (registration OTP will not work).
@@ -75,13 +85,9 @@ func (c *Config) ValidateTwilioVerify() error {
 	return nil
 }
 
-// EmailConfigReady returns true when SMTP configuration is sufficient to send emails.
+// EmailConfigReady returns true when Resend is configured to send emails.
 func (c *Config) EmailConfigReady() bool {
-	return strings.TrimSpace(c.SMTPHost) != "" &&
-		strings.TrimSpace(c.SMTPPort) != "" &&
-		strings.TrimSpace(c.SMTPUser) != "" &&
-		strings.TrimSpace(c.SMTPPassword) != "" &&
-		strings.TrimSpace(c.SMTPFrom) != ""
+	return strings.TrimSpace(c.ResendAPIKey) != "" && strings.TrimSpace(c.SMTPFrom) != ""
 }
 
 func Load() (*Config, error) {
@@ -127,10 +133,7 @@ func Load() (*Config, error) {
 		StorageSecretKey:    getEnv("STORAGE_SECRET_KEY", "minioadmin"),
 		StorageBucket:       getEnv("STORAGE_BUCKET", "rloco-uploads"),
 		StoragePublicURL:    getEnv("STORAGE_PUBLIC_URL", ""),
-		SMTPHost:            firstNonEmptyEnv("SMTP_HOST", "EMAIL_HOST"),
-		SMTPPort:            getEnv("SMTP_PORT", "587"),
-		SMTPUser:            firstNonEmptyEnv("SMTP_USER", "SMTP_USERNAME", "EMAIL_USER"),
-		SMTPPassword:        firstNonEmptyEnv("SMTP_PASSWORD", "SMTP_PASS", "EMAIL_PASSWORD"),
+		ResendAPIKey:        getEnv("RESEND_API_KEY", ""),
 		SMTPFrom:            firstNonEmptyEnvWithDefault("noreply@rloco.com", "SMTP_FROM", "SMTP_FROM_EMAIL", "EMAIL_FROM"),
 		SMTPFromName:        firstNonEmptyEnvWithDefault("R-Loko", "SMTP_FROM_NAME", "EMAIL_FROM_NAME"),
 		AppBaseURL:          getEnv("APP_BASE_URL", "https://rloco.com"),
@@ -159,7 +162,15 @@ func Load() (*Config, error) {
 		TwilioAccountSid:       getEnv("TWILIO_ACCOUNT_SID", ""),
 		TwilioAuthToken:        getEnv("TWILIO_AUTH_TOKEN", ""),
 		TwilioVerifyServiceSid: getEnv("TWILIO_VERIFY_SERVICE_SID", ""),
+		TwilioPhoneNumber:      getEnv("TWILIO_PHONE_NUMBER", ""),
+		FCMServiceAccountJSON:  getEnv("FCM_SERVICE_ACCOUNT_JSON", ""),
 		APIRateLimitRPM:        apiRateLimitRPM,
+		OrderDefaultShippingUSD:      float64Env("ORDER_DEFAULT_SHIPPING_USD", 15),
+		OrderDefaultTaxRate:          float64Env("ORDER_DEFAULT_TAX_RATE", 0.08),
+		OrderFreeShippingSubtotalUSD: float64Env("ORDER_FREE_SHIPPING_SUBTOTAL_USD", 200),
+		OrderINRPerUSD:               float64Env("ORDER_INR_PER_USD", 75),
+		OrderIndiaDefaultGSTPercent:  float64Env("ORDER_INDIA_DEFAULT_GST_PERCENT", 18),
+		StripeProductTaxCode:         strings.TrimSpace(getEnv("STRIPE_TAX_PRODUCT_CODE", "")),
 	}, nil
 }
 
@@ -184,4 +195,17 @@ func firstNonEmptyEnvWithDefault(defaultValue string, keys ...string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// float64Env parses a float env var; on empty or invalid returns defaultValue.
+func float64Env(key string, defaultValue float64) float64 {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return defaultValue
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || n < 0 {
+		return defaultValue
+	}
+	return n
 }

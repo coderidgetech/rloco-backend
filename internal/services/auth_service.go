@@ -318,6 +318,9 @@ func (s *authService) ForgotPassword(ctx context.Context, email string) error {
 		// Don't reveal if user exists or not for security
 		return nil
 	}
+	if !s.emailService.Configured() {
+		return errors.New("password reset email cannot be sent: SMTP is not configured on the server")
+	}
 
 	token, err := s.generateRandomToken()
 	if err != nil {
@@ -405,6 +408,9 @@ func (s *authService) ResendVerification(ctx context.Context, email string) erro
 
 	if user.EmailVerified {
 		return errors.New("email already verified")
+	}
+	if !s.emailService.Configured() {
+		return errors.New("verification email cannot be sent: SMTP is not configured on the server")
 	}
 
 	token, err := s.generateRandomToken()

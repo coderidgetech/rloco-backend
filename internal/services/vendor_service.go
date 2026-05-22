@@ -76,10 +76,20 @@ func (s *vendorService) Create(ctx context.Context, vendor *models.Vendor, initi
 		return nil, errors.New("vendor name is required")
 	}
 
-	if _, err := s.userRepo.GetByEmail(ctx, vendor.Email); err == nil {
-		return nil, fmt.Errorf("a user with email %s already exists", vendor.Email)
-	} else if !errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, err
+	existingUser, userErr := s.userRepo.GetByEmail(ctx, vendor.Email)
+	if userErr != nil && !errors.Is(userErr, mongo.ErrNoDocuments) {
+		return nil, userErr
+	}
+	if existingUser != nil {
+		switch existingUser.Role {
+		case "vendor":
+			return nil, fmt.Errorf("a vendor with email %s already exists", vendor.Email)
+		case "admin", "super_admin":
+			return nil, fmt.Errorf("a user with email %s already exists", vendor.Email)
+		default:
+			// Customer or other non-privileged role — upgrade to vendor
+			return s.upgradeToVendor(ctx, existingUser, vendor)
+		}
 	}
 
 	if initialPassword != "" && len(initialPassword) < 8 {
@@ -146,6 +156,28 @@ func (s *vendorService) Create(ctx context.Context, vendor *models.Vendor, initi
 
 	result.TemporaryPassword = plain
 	return result, nil
+}
+
+func (s *vendorService) upgradeToVendor(ctx context.Context, existingUser *models.User, vendor *models.Vendor) (*VendorCreateResult, error) {
+	if vendor.Status == "" {
+		vendor.Status = "active"
+	}
+	if err := s.vendorRepo.Create(ctx, vendor); err != nil {
+		return nil, err
+	}
+	vendorID := vendor.ID
+	existingUser.Role = "vendor"
+	existingUser.VendorID = &vendorID
+	if err := s.userRepo.Update(ctx, existingUser.ID, existingUser); err != nil {
+		_ = s.vendorRepo.Delete(ctx, vendor.ID)
+		return nil, err
+	}
+	return &VendorCreateResult{
+		Vendor:               vendor,
+		LoginURL:             s.appBaseURL + "/admin/login",
+		TemporaryPassword:    "", // existing user keeps their password
+		CredentialsEmailSent: false,
+	}, nil
 }
 
 func (s *vendorService) GetByID(ctx context.Context, id primitive.ObjectID) (*models.Vendor, error) {

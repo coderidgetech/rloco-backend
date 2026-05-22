@@ -27,6 +27,11 @@ type ProductRepository interface {
 	AtomicStockUpdate(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error
 	// AtomicStockIncrement restores stock (e.g. order cancellation)
 	AtomicStockIncrement(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error
+	// Variant group methods
+	GetVariantsByGroupID(ctx context.Context, groupID primitive.ObjectID) ([]*models.Product, error)
+	SetVariantGroup(ctx context.Context, productID primitive.ObjectID, groupID primitive.ObjectID, color string, isMain bool) error
+	UnsetVariantGroup(ctx context.Context, productID primitive.ObjectID) error
+	BulkInsert(ctx context.Context, products []*models.Product) error
 }
 
 type productRepository struct {
@@ -108,11 +113,15 @@ func (r *productRepository) Update(ctx context.Context, id primitive.ObjectID, p
 		"updated_at":          product.UpdatedAt,
 	}
 	
-	// Only include vendor_id if it's set
 	if product.VendorID != nil {
 		updateDoc["vendor_id"] = product.VendorID
 	}
-	
+	if product.VariantGroupID != nil {
+		updateDoc["variant_group_id"] = product.VariantGroupID
+		updateDoc["color"] = product.Color
+		updateDoc["is_main_variant"] = product.IsMainVariant
+	}
+
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
@@ -257,5 +266,63 @@ func (r *productRepository) AtomicStockIncrement(ctx context.Context, productID 
 			"$set": bson.M{"updated_at": time.Now()},
 		},
 	)
+	return err
+}
+
+func (r *productRepository) GetVariantsByGroupID(ctx context.Context, groupID primitive.ObjectID) ([]*models.Product, error) {
+	cursor, err := r.collection.Find(
+		ctx,
+		bson.M{"variant_group_id": groupID},
+		options.Find().SetSort(bson.M{"is_main_variant": -1, "color": 1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var products []*models.Product
+	if err := cursor.All(ctx, &products); err != nil {
+		return nil, err
+	}
+	return products, nil
+}
+
+func (r *productRepository) SetVariantGroup(ctx context.Context, productID primitive.ObjectID, groupID primitive.ObjectID, color string, isMain bool) error {
+	_, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": productID},
+		bson.M{"$set": bson.M{
+			"variant_group_id": groupID,
+			"color":            color,
+			"is_main_variant":  isMain,
+			"updated_at":       time.Now(),
+		}},
+	)
+	return err
+}
+
+func (r *productRepository) UnsetVariantGroup(ctx context.Context, productID primitive.ObjectID) error {
+	_, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": productID},
+		bson.M{
+			"$unset": bson.M{"variant_group_id": "", "color": "", "is_main_variant": ""},
+			"$set":   bson.M{"updated_at": time.Now()},
+		},
+	)
+	return err
+}
+
+func (r *productRepository) BulkInsert(ctx context.Context, products []*models.Product) error {
+	if len(products) == 0 {
+		return nil
+	}
+	docs := make([]interface{}, len(products))
+	for i, p := range products {
+		p.ID = primitive.NewObjectID()
+		p.CreatedAt = time.Now()
+		p.UpdatedAt = time.Now()
+		docs[i] = p
+	}
+	_, err := r.collection.InsertMany(ctx, docs)
 	return err
 }

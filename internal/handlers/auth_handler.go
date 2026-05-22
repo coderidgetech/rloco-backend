@@ -290,11 +290,15 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	}
 
 	if err := h.authService.ForgotPassword(c.Request.Context(), req.Email); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "SMTP is not configured") {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Always return success to prevent email enumeration
+	// Success path: either no user (generic message) or email queued
 	c.JSON(http.StatusOK, gin.H{"message": "If an account exists with this email, a password reset link has been sent"})
 }
 
@@ -345,7 +349,11 @@ func (h *AuthHandler) ResendVerification(c *gin.Context) {
 	}
 
 	if err := h.authService.ResendVerification(c.Request.Context(), req.Email); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "SMTP is not configured") {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 

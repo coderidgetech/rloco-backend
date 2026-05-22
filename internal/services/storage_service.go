@@ -93,7 +93,8 @@ func (s *storageService) Upload(ctx context.Context, file io.Reader, filename st
 		if err != nil {
 			return "", err
 		}
-		return newFilename, nil
+		u, err := s.GetURL(ctx, newFilename)
+		return u, err
 	}
 
 	return newFilename, nil

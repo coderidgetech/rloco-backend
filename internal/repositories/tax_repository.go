@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,12 +22,28 @@ type TaxRepository interface {
 }
 
 type taxRepository struct {
-	collection *mongo.Collection
+	collection            *mongo.Collection
+	indiaDefaultGSTPercent float64 // when no Mongo row matches India (Rate is percent, e.g. 18 = 18%)
 }
 
-func NewTaxRepository(db *MongoDB) TaxRepository {
+func NewTaxRepository(db *MongoDB, indiaDefaultGSTPercent float64) TaxRepository {
+	if indiaDefaultGSTPercent < 0 {
+		indiaDefaultGSTPercent = 0
+	}
 	return &taxRepository{
-		collection: db.GetCollection("tax_rates"),
+		collection:             db.GetCollection("tax_rates"),
+		indiaDefaultGSTPercent: indiaDefaultGSTPercent,
+	}
+}
+
+func taxRegionFromCountry(country string) string {
+	switch strings.TrimSpace(strings.ToLower(country)) {
+	case "united states", "us", "usa":
+		return "US"
+	case "india", "in":
+		return "IN"
+	default:
+		return ""
 	}
 }
 
@@ -68,12 +85,24 @@ func (r *taxRepository) GetByLocation(ctx context.Context, country, state, city,
 		}
 	}
 
-	// Return default 8% if no match found
-	return &models.TaxRate{
-		Rate:     8.0,
-		TaxType:  "sales_tax",
-		IsActive: true,
-	}, nil
+	region := taxRegionFromCountry(country)
+	switch region {
+	case "US":
+		// US sales tax is computed with Stripe Tax in OrderService; do not invent a default % here.
+		return nil, mongo.ErrNoDocuments
+	case "IN":
+		gst := r.indiaDefaultGSTPercent
+		if gst <= 0 {
+			gst = 18
+		}
+		return &models.TaxRate{
+			Rate:     gst,
+			TaxType:  "gst",
+			IsActive: true,
+		}, nil
+	default:
+		return nil, mongo.ErrNoDocuments
+	}
 }
 
 func (r *taxRepository) List(ctx context.Context, activeOnly bool) ([]*models.TaxRate, error) {
@@ -82,7 +111,7 @@ func (r *taxRepository) List(ctx context.Context, activeOnly bool) ([]*models.Ta
 		filter["is_active"] = true
 	}
 
-	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.M{"country": 1, "state": 1}))
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "country", Value: 1}, {Key: "state", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
