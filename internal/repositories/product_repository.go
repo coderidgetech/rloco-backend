@@ -161,7 +161,10 @@ func (r *productRepository) List(ctx context.Context, filter bson.M, limit, skip
 }
 
 func (r *productRepository) GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error) {
-	filter := MergeMarketFilter(bson.M{"featured": true}, market)
+	filter := MergeMarketFilter(bson.M{
+		"featured": true,
+		"$or":      []bson.M{{"variant_group_id": nil}, {"is_main_variant": true}},
+	}, market)
 	cursor, err := r.collection.Find(
 		ctx,
 		filter,
@@ -180,7 +183,10 @@ func (r *productRepository) GetFeatured(ctx context.Context, limit int, market s
 }
 
 func (r *productRepository) GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error) {
-	filter := MergeMarketFilter(bson.M{"new_arrival": true}, market)
+	filter := MergeMarketFilter(bson.M{
+		"new_arrival": true,
+		"$or":         []bson.M{{"variant_group_id": nil}, {"is_main_variant": true}},
+	}, market)
 	cursor, err := r.collection.Find(
 		ctx,
 		filter,
