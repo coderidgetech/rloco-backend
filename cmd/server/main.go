@@ -100,7 +100,8 @@ func main() {
 	productService := services.NewProductService(productRepo)
 	categoryService := services.NewCategoryService(categoryRepo)
 	shippoClient := services.NewShippoClient(cfg)
-	shippingService := services.NewShippingService(shippingRepo, shippoClient)
+	shiprocketClient := services.NewShiprocketClient(cfg)
+	shippingService := services.NewShippingService(shippingRepo, shippoClient, shiprocketClient)
 	taxService := services.NewTaxService(taxRepo)
 	promotionService := services.NewPromotionService(promotionRepo)
 	orderCheckoutPricing := services.OrderCheckoutPricing{
@@ -113,7 +114,7 @@ func main() {
 	orderService := services.NewOrderService(orderRepo, trackingRepo, productRepo, promotionRepo, promotionService, orderCheckoutPricing, emailService, shippingService, taxService, stripeUSTax, twilioSMSService, fcmService, userRepo, rewardsRepo)
 	newsletterService := services.NewNewsletterService(newsletterRepo)
 	cartService := services.NewCartService(cartRepo, productRepo)
-	wishlistService := services.NewWishlistService(wishlistRepo, productRepo)
+	wishlistService := services.NewWishlistService(wishlistRepo, productRepo, orderRepo)
 	vendorService := services.NewVendorService(vendorRepo, userRepo, emailService, cfg.AppBaseURL)
 	vendorApplicationService := services.NewVendorApplicationService(vendorApplicationRepo, vendorService, emailService, cfg.AppBaseURL)
 	analyticsService := services.NewAnalyticsService(analyticsRepo, orderRepo, productRepo)
@@ -153,6 +154,7 @@ func main() {
 	inventoryHandler := handlers.NewInventoryHandler(inventoryService)
 	supportHandler := handlers.NewSupportHandler(supportService)
 	paymentHandler := handlers.NewPaymentHandler(paymentService)
+	shippingWebhookHandler := handlers.NewShippingWebhookHandler(orderRepo, orderService, emailService, cfg.ShippoWebhookSecret, cfg.ShiprocketWebhookSecret)
 	videoHandler := handlers.NewVideoHandler(videoService)
 	addressHandler := handlers.NewAddressHandler(addressService)
 	rewardsHandler := handlers.NewRewardsHandler(orderRepo, rewardsRepo)
@@ -220,6 +222,7 @@ func main() {
 			auth.POST("/verify-email", authHandler.VerifyEmail)
 			auth.POST("/resend-verification", authHandler.ResendVerification)
 			auth.PUT("/profile", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.UpdateProfile)
+		auth.POST("/avatar", middleware.AuthRequired(), uploadHandler.Upload)
 			auth.PUT("/password", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.ChangePassword)
 			auth.POST("/deactivate", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.DeactivateAccount)
 		}
@@ -294,6 +297,9 @@ func main() {
 		api.POST("/contact", contactHandler.Submit)
 		api.POST("/vendor/apply", vendorApplicationHandler.Submit)
 
+		// Guest order placement (no auth required; COD only)
+		api.POST("/orders/guest", middleware.CheckoutRateLimit(), orderHandler.CreateGuest)
+
 		// Orders
 		orders := api.Group("/orders")
 		orders.Use(middleware.AuthRequired())
@@ -307,6 +313,7 @@ func main() {
 			orders.POST("/:id/cancel", orderHandler.Cancel)
 			orders.POST("/:id/return", returnHandler.Create)
 			orders.PUT("/:id/status", middleware.RequireRole("admin"), orderHandler.UpdateStatus)
+			orders.POST("/:id/fulfill", middleware.RequireRole("admin"), orderHandler.Fulfill)
 		}
 
 		// Returns
@@ -372,10 +379,12 @@ func main() {
 			payments.POST("/refund/:id", middleware.RequireRole("admin"), paymentHandler.Refund)
 		}
 
-		// Payment Webhooks (no auth required, verified by signature)
+		// Webhooks (no auth required, verified by signature/secret)
 		webhooks := api.Group("/webhooks")
 		{
 			webhooks.POST("/:gateway", paymentHandler.HandleWebhook)
+			webhooks.POST("/shippo", shippingWebhookHandler.HandleShippoWebhook)
+			webhooks.POST("/shiprocket", shippingWebhookHandler.HandleShiprocketWebhook)
 		}
 
 		// Promotions

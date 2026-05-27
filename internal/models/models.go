@@ -18,6 +18,7 @@ type User struct {
 	Phone        *string             `bson:"phone,omitempty" json:"phone,omitempty"`
 	PhoneKey     string              `bson:"phone_key,omitempty" json:"-"` // digits-only lookup key; not exposed in JSON
 	Birthday     *time.Time          `bson:"birthday,omitempty" json:"birthday,omitempty"`
+	City         string              `bson:"city,omitempty" json:"city,omitempty"`
 	Active       bool                `bson:"active" json:"active"` // User account status
 	EmailVerified bool               `bson:"email_verified" json:"email_verified"`
 	FCMTokens    []string            `bson:"fcm_tokens,omitempty" json:"-"` // Firebase Cloud Messaging device tokens (max 5)
@@ -78,9 +79,11 @@ type Category struct {
 
 // Order represents an order
 type Order struct {
-	ID             primitive.ObjectID `bson:"_id" json:"id"`
-	OrderNumber    string             `bson:"order_number" json:"order_number"`
-	UserID         primitive.ObjectID `bson:"user_id" json:"user_id"`
+	ID             primitive.ObjectID  `bson:"_id" json:"id"`
+	OrderNumber    string              `bson:"order_number" json:"order_number"`
+	UserID         primitive.ObjectID  `bson:"user_id" json:"user_id"`
+	GuestEmail     *string             `bson:"guest_email,omitempty" json:"guest_email,omitempty"`
+	GuestName      *string             `bson:"guest_name,omitempty" json:"guest_name,omitempty"`
 	Items          []OrderItem        `bson:"items" json:"items"`
 	ShippingInfo   ShippingInfo       `bson:"shipping_info" json:"shipping_info"`
 	PaymentInfo    PaymentInfo        `bson:"payment_info" json:"payment_info"`
@@ -94,6 +97,7 @@ type Order struct {
 	PaymentMethod  string             `bson:"payment_method" json:"payment_method"`
 	PaymentStatus  string             `bson:"payment_status" json:"payment_status"` // "pending", "paid", "failed"
 	TrackingNumber      *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
+	LabelURL            *string            `bson:"label_url,omitempty" json:"label_url,omitempty"`
 	PromotionCode       *string            `bson:"promotion_code,omitempty" json:"promotion_code,omitempty"`
 	RewardPointsApplied int64              `bson:"reward_points_applied,omitempty" json:"reward_points_applied,omitempty"`
 	CreatedAt           time.Time          `bson:"created_at" json:"created_at"`

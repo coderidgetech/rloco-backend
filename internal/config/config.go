@@ -49,7 +49,18 @@ type Config struct {
 	ShippoParcelHeight  string
 	ShippoParcelWeight  string
 	ShippoDistanceUnit  string
-	ShippoMassUnit      string
+	ShippoMassUnit          string
+	ShippoWebhookSecret     string // HMAC secret for verifying Shippo track_updated webhooks
+	// Shiprocket — used for domestic India shipments
+	ShiprocketEmail          string
+	ShiprocketPassword       string
+	ShiprocketBaseURL        string
+	ShiprocketPickupLocation string // name of the pickup location configured in Shiprocket dashboard
+	ShiprocketParcelLength   string
+	ShiprocketParcelWidth    string
+	ShiprocketParcelHeight   string
+	ShiprocketParcelWeight   string
+	ShiprocketWebhookSecret  string // shared token for validating Shiprocket webhook calls
 	// Twilio Verify — required for registration OTP (no fallback)
 	TwilioAccountSid       string
 	TwilioAuthToken        string
@@ -158,7 +169,17 @@ func Load() (*Config, error) {
 		ShippoParcelHeight:  getEnv("SHIPPO_PARCEL_HEIGHT", "4"),
 		ShippoParcelWeight:  getEnv("SHIPPO_PARCEL_WEIGHT", "0.5"),
 		ShippoDistanceUnit:  getEnv("SHIPPO_DISTANCE_UNIT", "in"),
-		ShippoMassUnit:      getEnv("SHIPPO_MASS_UNIT", "lb"),
+		ShippoMassUnit:          getEnv("SHIPPO_MASS_UNIT", "lb"),
+		ShippoWebhookSecret:     getEnv("SHIPPO_WEBHOOK_SECRET", ""),
+		ShiprocketEmail:          getEnv("SHIPROCKET_EMAIL", ""),
+		ShiprocketPassword:       getEnv("SHIPROCKET_PASSWORD", ""),
+		ShiprocketBaseURL:        getEnv("SHIPROCKET_BASE_URL", "https://apiv2.shiprocket.in/v1/external"),
+		ShiprocketPickupLocation: getEnv("SHIPROCKET_PICKUP_LOCATION", "Primary"),
+		ShiprocketParcelLength:   getEnv("SHIPROCKET_PARCEL_LENGTH", "10"),
+		ShiprocketParcelWidth:    getEnv("SHIPROCKET_PARCEL_WIDTH", "8"),
+		ShiprocketParcelHeight:   getEnv("SHIPROCKET_PARCEL_HEIGHT", "4"),
+		ShiprocketParcelWeight:   getEnv("SHIPROCKET_PARCEL_WEIGHT", "0.5"),
+		ShiprocketWebhookSecret:  getEnv("SHIPROCKET_WEBHOOK_SECRET", ""),
 		TwilioAccountSid:       getEnv("TWILIO_ACCOUNT_SID", ""),
 		TwilioAuthToken:        getEnv("TWILIO_AUTH_TOKEN", ""),
 		TwilioVerifyServiceSid: getEnv("TWILIO_VERIFY_SERVICE_SID", ""),

@@ -17,10 +17,14 @@ import (
 
 type OrderService interface {
 	Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64) (*models.Order, error)
+	CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string) (*models.Order, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*models.Order, error)
 	GetByOrderNumber(ctx context.Context, orderNumber string) (*models.Order, error)
 	GetByUserID(ctx context.Context, userID primitive.ObjectID, limit, skip int) ([]*models.Order, int64, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
+	// FulfillOrder purchases a shipping label via the appropriate carrier, saves the
+	// tracking number on the order, then transitions it to "shipped".
+	FulfillOrder(ctx context.Context, id primitive.ObjectID) (*models.Order, error)
 	Cancel(ctx context.Context, id primitive.ObjectID, userID primitive.ObjectID, reason string) error
 	GetTrackingUpdates(ctx context.Context, orderID primitive.ObjectID) ([]*models.OrderTrackingUpdate, error)
 	AddTrackingUpdate(ctx context.Context, orderID primitive.ObjectID, status, location, description string, trackingNumber *string) error
@@ -312,6 +316,41 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	return order, nil
 }
 
+func (s *orderService) CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string) (*models.Order, error) {
+	if strings.TrimSpace(guestEmail) == "" {
+		return nil, errors.New("guest email is required")
+	}
+	if strings.TrimSpace(guestName) == "" {
+		return nil, errors.New("guest name is required")
+	}
+	if strings.ToLower(paymentMethod) != "cod" && strings.ToLower(paymentMethod) != "cash_on_delivery" {
+		return nil, errors.New("guest orders only support Cash on Delivery")
+	}
+	if len(items) == 0 {
+		return nil, errors.New("order must contain at least one item")
+	}
+	// Fill in guest name/email into shipping info if not already provided
+	if shippingInfo.Email == "" {
+		shippingInfo.Email = guestEmail
+	}
+	if shippingInfo.FirstName == "" && shippingInfo.LastName == "" {
+		parts := strings.SplitN(strings.TrimSpace(guestName), " ", 2)
+		shippingInfo.FirstName = parts[0]
+		if len(parts) > 1 {
+			shippingInfo.LastName = parts[1]
+		}
+	}
+	order, err := s.Create(ctx, primitive.ObjectID{}, items, shippingInfo, models.PaymentInfo{}, paymentMethod, promotionCode, 0)
+	if err != nil {
+		return nil, err
+	}
+	// Annotate with guest identity for admin visibility
+	order.GuestEmail = &guestEmail
+	order.GuestName = &guestName
+	_ = s.orderRepo.Update(ctx, order.ID, order)
+	return order, nil
+}
+
 func normalizeSupportedCountry(input string) (string, bool) {
 	country := strings.TrimSpace(strings.ToLower(input))
 	switch country {
@@ -430,6 +469,32 @@ func (s *orderService) List(ctx context.Context, filter map[string]interface{}, 
 
 func (s *orderService) GetStats(ctx context.Context, startDate, endDate time.Time) (map[string]interface{}, error) {
 	return s.orderRepo.GetStats(ctx, startDate, endDate)
+}
+
+func (s *orderService) FulfillOrder(ctx context.Context, id primitive.ObjectID) (*models.Order, error) {
+	order, err := s.orderRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if order.Status == "shipped" || order.Status == "delivered" || order.Status == "cancelled" {
+		return nil, fmt.Errorf("order cannot be fulfilled in status %q", order.Status)
+	}
+
+	trackingNumber, labelURL, err := s.shippingService.FulfillShipment(ctx, order, 0)
+	if err != nil {
+		return nil, fmt.Errorf("carrier label purchase failed: %w", err)
+	}
+
+	if err := s.orderRepo.SetTrackingNumber(ctx, id, trackingNumber, labelURL); err != nil {
+		return nil, err
+	}
+
+	// UpdateStatus reads the fresh tracking number and fires email/SMS/FCM notifications
+	if err := s.UpdateStatus(ctx, id, "shipped"); err != nil {
+		return nil, err
+	}
+
+	return s.orderRepo.GetByID(ctx, id)
 }
 
 func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID primitive.ObjectID, reason string) error {

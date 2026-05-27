@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -11,6 +12,10 @@ import (
 
 type ShippingService interface {
 	CalculateShipping(ctx context.Context, req ShippingQuoteRequest) ([]*models.ShippingMethod, error)
+	// FulfillShipment purchases a shipping label for the order via the appropriate carrier
+	// (Shiprocket for India, Shippo for all other destinations) and returns the
+	// tracking number and label URL. A non-empty labelURL is only returned for Shippo.
+	FulfillShipment(ctx context.Context, order *models.Order, weightLb float64) (trackingNumber, labelURL string, err error)
 	GetMethods(ctx context.Context, activeOnly bool) ([]*models.ShippingMethod, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*models.ShippingMethod, error)
 	Create(ctx context.Context, method *models.ShippingMethod) error
@@ -35,13 +40,44 @@ type ShippingQuoteRequest struct {
 type shippingService struct {
 	shippingRepo repositories.ShippingRepository
 	shippo       *shippoClient
+	shiprocket   *shiprocketClient
 }
 
-func NewShippingService(shippingRepo repositories.ShippingRepository, shippo *shippoClient) ShippingService {
+func NewShippingService(shippingRepo repositories.ShippingRepository, shippo *shippoClient, shiprocket *shiprocketClient) ShippingService {
 	return &shippingService{
 		shippingRepo: shippingRepo,
 		shippo:       shippo,
+		shiprocket:   shiprocket,
 	}
+}
+
+func (s *shippingService) FulfillShipment(ctx context.Context, order *models.Order, weightLb float64) (trackingNumber, labelURL string, err error) {
+	country := strings.ToUpper(strings.TrimSpace(order.ShippingInfo.Country))
+
+	if country == "IN" {
+		if s.shiprocket == nil {
+			return "", "", fmt.Errorf("shiprocket is not configured for India shipments")
+		}
+		awb, err := s.shiprocket.CreateShipment(ctx, order)
+		return awb, "", err
+	}
+
+	// All non-India destinations go through Shippo
+	if s.shippo == nil {
+		return "", "", fmt.Errorf("shippo is not configured for international shipments")
+	}
+	destination := shippoAddress{
+		Name:    firstNonEmpty(strings.TrimSpace(order.ShippingInfo.FirstName+" "+order.ShippingInfo.LastName), "Customer"),
+		Email:   strings.TrimSpace(order.ShippingInfo.Email),
+		Phone:   strings.TrimSpace(order.ShippingInfo.Phone),
+		Street1: strings.TrimSpace(order.ShippingInfo.Address),
+		City:    strings.TrimSpace(order.ShippingInfo.City),
+		State:   strings.TrimSpace(order.ShippingInfo.State),
+		Zip:     strings.TrimSpace(order.ShippingInfo.ZipCode),
+		Country: normalizeCountryCode(order.ShippingInfo.Country),
+	}
+	w := weightLb
+	return s.shippo.purchaseLabel(ctx, destination, &w)
 }
 
 func (s *shippingService) CalculateShipping(ctx context.Context, req ShippingQuoteRequest) ([]*models.ShippingMethod, error) {

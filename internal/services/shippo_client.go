@@ -80,6 +80,19 @@ type shippoShipmentResponse struct {
 	Messages []shippoErrorDetail `json:"messages"`
 }
 
+type shippoTransactionRequest struct {
+	Rate          string `json:"rate"`
+	LabelFileType string `json:"label_file_type"`
+	Async         bool   `json:"async"`
+}
+
+type shippoTransactionResponse struct {
+	Status         string `json:"status"`
+	TrackingNumber string `json:"tracking_number"`
+	LabelURL       string `json:"label_url"`
+	Messages       []shippoErrorDetail `json:"messages"`
+}
+
 func NewShippoClient(cfg *config.Config) *shippoClient {
 	if cfg == nil || strings.TrimSpace(cfg.ShippoAPIKey) == "" {
 		return nil
@@ -292,6 +305,98 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// purchaseLabel re-quotes rates for the destination and purchases the cheapest one,
+// returning the tracking number and label PDF URL from Shippo.
+func (c *shippoClient) purchaseLabel(ctx context.Context, destination shippoAddress, weightLb *float64) (trackingNumber, labelURL string, err error) {
+	if !c.canQuote() {
+		return "", "", fmt.Errorf("shippo is not fully configured")
+	}
+
+	payload := shippoShipmentRequest{
+		AddressFrom: c.origin,
+		AddressTo:   destination,
+		Parcels:     []shippoParcel{c.parcelForQuote(weightLb)},
+		Async:       false,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/shipments/", bytes.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Authorization", "ShippoToken "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return "", "", fmt.Errorf("shippo shipment failed: %s", strings.TrimSpace(string(respBody)))
+	}
+
+	var shipment shippoShipmentResponse
+	if err := json.Unmarshal(respBody, &shipment); err != nil {
+		return "", "", err
+	}
+	if len(shipment.Rates) == 0 {
+		return "", "", fmt.Errorf("shippo returned no rates for destination")
+	}
+
+	// pick cheapest rate
+	best := shipment.Rates[0]
+	bestCost, _ := strconv.ParseFloat(best.Amount, 64)
+	for _, r := range shipment.Rates[1:] {
+		if cost, err2 := strconv.ParseFloat(r.Amount, 64); err2 == nil && cost < bestCost {
+			best = r
+			bestCost = cost
+		}
+	}
+
+	// purchase the label
+	txPayload := shippoTransactionRequest{
+		Rate:          best.ObjectID,
+		LabelFileType: "PDF",
+		Async:         false,
+	}
+	txBody, _ := json.Marshal(txPayload)
+
+	txReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/transactions/", bytes.NewReader(txBody))
+	if err != nil {
+		return "", "", err
+	}
+	txReq.Header.Set("Authorization", "ShippoToken "+c.apiKey)
+	txReq.Header.Set("Content-Type", "application/json")
+
+	txResp, err := c.httpClient.Do(txReq)
+	if err != nil {
+		return "", "", err
+	}
+	defer txResp.Body.Close()
+
+	txRespBody, _ := io.ReadAll(txResp.Body)
+	if txResp.StatusCode >= http.StatusBadRequest {
+		return "", "", fmt.Errorf("shippo transaction failed: %s", strings.TrimSpace(string(txRespBody)))
+	}
+
+	var tx shippoTransactionResponse
+	if err := json.Unmarshal(txRespBody, &tx); err != nil {
+		return "", "", err
+	}
+	if tx.Status != "SUCCESS" || tx.TrackingNumber == "" {
+		msg := firstShippoMessage(tx.Messages)
+		return "", "", fmt.Errorf("shippo label purchase failed: %s (status: %s)", msg, tx.Status)
+	}
+
+	return tx.TrackingNumber, tx.LabelURL, nil
 }
 
 func sortShippingMethodsByCost(methods []*models.ShippingMethod) {

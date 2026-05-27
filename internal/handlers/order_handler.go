@@ -370,6 +370,28 @@ func (h *OrderHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, order)
 }
 
+// CreateGuest places an order without authentication. Only Cash on Delivery is
+// supported for guest orders. The cart items are submitted inline (no server-side cart).
+func (h *OrderHandler) CreateGuest(c *gin.Context) {
+	var req struct {
+		GuestEmail    string             `json:"guest_email" binding:"required,email"`
+		GuestName     string             `json:"guest_name" binding:"required"`
+		Items         []models.OrderItem `json:"items" binding:"required"`
+		ShippingInfo  models.ShippingInfo `json:"shipping_info" binding:"required"`
+		PromotionCode *string             `json:"promotion_code,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	order, err := h.orderService.CreateGuestOrder(c.Request.Context(), req.GuestEmail, req.GuestName, req.Items, req.ShippingInfo, "cod", req.PromotionCode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, order)
+}
+
 func (h *OrderHandler) Track(c *gin.Context) {
 	orderNumber := c.Param("orderNumber")
 	order, err := h.orderService.GetByOrderNumber(c.Request.Context(), orderNumber)
@@ -467,5 +489,24 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 	}
 
 	order, _ := h.orderService.GetByID(c.Request.Context(), orderID)
+	c.JSON(http.StatusOK, order)
+}
+
+// Fulfill purchases a shipping label via the appropriate carrier (Shiprocket for India,
+// Shippo for all other destinations), saves the tracking number, and marks the order
+// as shipped — firing email/SMS/push notifications automatically.
+func (h *OrderHandler) Fulfill(c *gin.Context) {
+	orderID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+
+	order, err := h.orderService.FulfillOrder(c.Request.Context(), orderID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, order)
 }
