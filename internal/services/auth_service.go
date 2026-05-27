@@ -29,7 +29,7 @@ type AuthService interface {
 	ResetPassword(ctx context.Context, token, newPassword string) error
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerification(ctx context.Context, email string) error
-	UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time, name *string, email *string) error
+	UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time, name *string, email *string, avatar *string, city *string) error
 	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error
 	DeactivateAccount(ctx context.Context, userID string) error
 	DeleteAccount(ctx context.Context, userID string) error
@@ -433,7 +433,7 @@ func (s *authService) ResendVerification(ctx context.Context, email string) erro
 	return s.emailService.SendEmailVerification(user.Email, token)
 }
 
-func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time, name *string, email *string) error {
+func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *string, birthday *time.Time, name *string, email *string, avatar *string, city *string) error {
 	id, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return errors.New("invalid user ID")
@@ -493,6 +493,14 @@ func (s *authService) UpdateProfile(ctx context.Context, userID string, phone *s
 			return errors.New("date of birth cannot be in the future")
 		}
 		user.Birthday = birthday
+	}
+	if avatar != nil {
+		if a := strings.TrimSpace(*avatar); a != "" {
+			user.Avatar = a
+		}
+	}
+	if city != nil {
+		user.City = strings.TrimSpace(*city)
 	}
 	user.UpdatedAt = time.Now()
 

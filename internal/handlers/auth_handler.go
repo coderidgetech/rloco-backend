@@ -378,6 +378,8 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		Birthday *string `json:"birthday,omitempty"` // ISO 8601 format: "2006-01-02"
 		Name     *string `json:"name,omitempty"`
 		Email    *string `json:"email,omitempty" binding:"omitempty,email"`
+		Avatar   *string `json:"avatar,omitempty"`
+		City     *string `json:"city,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -396,7 +398,7 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		birthday = &parsed
 	}
 
-	if err := h.authService.UpdateProfile(c.Request.Context(), userIDStr, phone, birthday, req.Name, req.Email); err != nil {
+	if err := h.authService.UpdateProfile(c.Request.Context(), userIDStr, phone, birthday, req.Name, req.Email, req.Avatar, req.City); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

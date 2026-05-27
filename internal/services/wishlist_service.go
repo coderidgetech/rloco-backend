@@ -20,12 +20,14 @@ type WishlistService interface {
 type wishlistService struct {
 	wishlistRepo repositories.WishlistRepository
 	productRepo  repositories.ProductRepository
+	orderRepo    repositories.OrderRepository
 }
 
-func NewWishlistService(wishlistRepo repositories.WishlistRepository, productRepo repositories.ProductRepository) WishlistService {
+func NewWishlistService(wishlistRepo repositories.WishlistRepository, productRepo repositories.ProductRepository, orderRepo repositories.OrderRepository) WishlistService {
 	return &wishlistService{
 		wishlistRepo: wishlistRepo,
 		productRepo:  productRepo,
+		orderRepo:    orderRepo,
 	}
 }
 
@@ -73,24 +75,38 @@ func (s *wishlistService) GetProductAnalytics(ctx context.Context, productID pri
 		return nil, err
 	}
 
-	// Calculate purchase conversion (placeholder - would need order data)
-	// For now, return 0
 	purchaseConversion := 0.0
+	if uniqueUsers > 0 {
+		wishlistUserIDs, err := s.wishlistRepo.GetUserIDsByProduct(ctx, productID)
+		if err == nil && len(wishlistUserIDs) > 0 {
+			buyers, err := s.orderRepo.CountBuyersOfProductFromUsers(ctx, productID, wishlistUserIDs)
+			if err == nil {
+				purchaseConversion = float64(buyers) / float64(uniqueUsers) * 100
+			}
+		}
+	}
 
 	return map[string]interface{}{
-		"product_id":         productID.Hex(),
-		"wishlist_count":     wishlistCount,
-		"unique_users":       uniqueUsers,
+		"product_id":          productID.Hex(),
+		"wishlist_count":      wishlistCount,
+		"unique_users":        uniqueUsers,
 		"purchase_conversion": purchaseConversion,
-		"trend":              "stable", // Would need historical data
-		"trend_percent":      0.0,
+		"trend":               "stable",
+		"trend_percent":       0.0,
 	}, nil
 }
 
 func (s *wishlistService) GetUserAnalytics(ctx context.Context) (map[string]interface{}, error) {
-	// Placeholder - would need to aggregate user wishlist data
+	totalWishlists, err := s.wishlistRepo.GetTotalCount(ctx)
+	if err != nil {
+		return nil, err
+	}
+	activeUsers, err := s.wishlistRepo.GetActiveUsersCount(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
-		"total_wishlists": 0,
-		"active_users":    0,
+		"total_wishlists": totalWishlists,
+		"active_users":    activeUsers,
 	}, nil
 }

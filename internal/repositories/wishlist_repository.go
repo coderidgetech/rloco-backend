@@ -18,6 +18,9 @@ type WishlistRepository interface {
 	GetProductWishlistCount(ctx context.Context, productID primitive.ObjectID) (int64, error)
 	GetUniqueUsersCount(ctx context.Context, productID primitive.ObjectID) (int64, error)
 	GetAllByProductID(ctx context.Context, productID primitive.ObjectID) ([]*models.Wishlist, error)
+	GetUserIDsByProduct(ctx context.Context, productID primitive.ObjectID) ([]primitive.ObjectID, error)
+	GetTotalCount(ctx context.Context) (int64, error)
+	GetActiveUsersCount(ctx context.Context) (int64, error)
 }
 
 type wishlistRepository struct {
@@ -117,4 +120,53 @@ func (r *wishlistRepository) GetAllByProductID(ctx context.Context, productID pr
 		return nil, err
 	}
 	return wishlists, nil
+}
+
+func (r *wishlistRepository) GetUserIDsByProduct(ctx context.Context, productID primitive.ObjectID) ([]primitive.ObjectID, error) {
+	pipeline := []bson.M{
+		{"$match": bson.M{"product_id": productID}},
+		{"$group": bson.M{"_id": "$user_id"}},
+	}
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var results []struct {
+		ID primitive.ObjectID `bson:"_id"`
+	}
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+	ids := make([]primitive.ObjectID, len(results))
+	for i, r := range results {
+		ids[i] = r.ID
+	}
+	return ids, nil
+}
+
+func (r *wishlistRepository) GetTotalCount(ctx context.Context) (int64, error) {
+	return r.collection.CountDocuments(ctx, bson.M{})
+}
+
+func (r *wishlistRepository) GetActiveUsersCount(ctx context.Context) (int64, error) {
+	pipeline := []bson.M{
+		{"$group": bson.M{"_id": "$user_id"}},
+		{"$count": "active_users"},
+	}
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+	var result struct {
+		ActiveUsers int64 `bson:"active_users"`
+	}
+	if cursor.Next(ctx) {
+		if err := cursor.Decode(&result); err != nil {
+			return 0, err
+		}
+		return result.ActiveUsers, nil
+	}
+	return 0, nil
 }
