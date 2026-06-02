@@ -4,31 +4,24 @@ import (
 	"context"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"rloco-backend/internal/models"
 	"rloco-backend/internal/repositories"
 )
 
 type InventoryService interface {
-	CheckLowStock(ctx context.Context, threshold int) ([]LowStockItem, error)
-	GetStockAlerts(ctx context.Context) ([]StockAlert, error)
+	CheckLowStock(ctx context.Context, threshold int) ([]models.LowStockItem, error)
+	GetStockAlerts(ctx context.Context, threshold int) ([]StockAlert, error)
 }
 
-type LowStockItem struct {
-	ProductID   primitive.ObjectID `json:"product_id"`
-	ProductName string            `json:"product_name"`
-	Size        string            `json:"size"`
-	CurrentStock int              `json:"current_stock"`
-	Threshold   int               `json:"threshold"`
-}
-
+// StockAlert wraps a LowStockItem with a categorised alert_type for the admin UI.
 type StockAlert struct {
-	ProductID   primitive.ObjectID `json:"product_id"`
-	ProductName string            `json:"product_name"`
-	Size        string            `json:"size"`
-	Stock       int               `json:"stock"`
-	AlertType   string            `json:"alert_type"` // "low", "out_of_stock"
-	CreatedAt   time.Time         `json:"created_at"`
+	ProductID   string    `json:"product_id"`
+	ProductName string    `json:"product_name"`
+	SKU         string    `json:"sku"`
+	Size        string    `json:"size"`
+	Stock       int       `json:"stock"`
+	AlertType   string    `json:"alert_type"` // "out_of_stock" | "low"
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type inventoryService struct {
@@ -36,58 +29,46 @@ type inventoryService struct {
 }
 
 func NewInventoryService(productRepo repositories.ProductRepository) InventoryService {
-	return &inventoryService{
-		productRepo: productRepo,
-	}
+	return &inventoryService{productRepo: productRepo}
 }
 
-func (s *inventoryService) CheckLowStock(ctx context.Context, threshold int) ([]LowStockItem, error) {
-	// Get all products
-	products, _, err := s.productRepo.List(ctx, bson.M{}, 1000, 0, bson.M{"created_at": -1})
+// CheckLowStock returns one row per product×size whose qty ≤ threshold.
+// Filtering is done at the DB level via an aggregation pipeline.
+func (s *inventoryService) CheckLowStock(ctx context.Context, threshold int) ([]models.LowStockItem, error) {
+	items, err := s.productRepo.LowStockItems(ctx, threshold)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []models.LowStockItem{}
+	}
+	return items, nil
+}
+
+// GetStockAlerts derives alert rows from the low-stock scan so we never do two
+// full product scans.  threshold is respected (no more hard-coded 10).
+func (s *inventoryService) GetStockAlerts(ctx context.Context, threshold int) ([]StockAlert, error) {
+	items, err := s.CheckLowStock(ctx, threshold)
 	if err != nil {
 		return nil, err
 	}
 
-	var lowStockItems []LowStockItem
-	for _, product := range products {
-		for size, stock := range product.Stock {
-			if stock <= threshold {
-				lowStockItems = append(lowStockItems, LowStockItem{
-					ProductID:   product.ID,
-					ProductName: product.Name,
-					Size:        size,
-					CurrentStock: stock,
-					Threshold:   threshold,
-				})
-			}
-		}
-	}
-
-	return lowStockItems, nil
-}
-
-func (s *inventoryService) GetStockAlerts(ctx context.Context) ([]StockAlert, error) {
-	lowStock, err := s.CheckLowStock(ctx, 10) // Default threshold: 10
-	if err != nil {
-		return nil, err
-	}
-
-	alerts := make([]StockAlert, 0, len(lowStock))
-	for _, item := range lowStock {
+	alerts := make([]StockAlert, 0, len(items))
+	now := time.Now()
+	for _, item := range items {
 		alertType := "low"
-		if item.CurrentStock == 0 {
+		if item.Stock == 0 {
 			alertType = "out_of_stock"
 		}
-
 		alerts = append(alerts, StockAlert{
-			ProductID:   item.ProductID,
-			ProductName: item.ProductName,
+			ProductID:   item.ProductID.Hex(),
+			ProductName: item.Name,
+			SKU:         item.SKU,
 			Size:        item.Size,
-			Stock:       item.CurrentStock,
+			Stock:       item.Stock,
 			AlertType:   alertType,
-			CreatedAt:   time.Now(),
+			CreatedAt:   now,
 		})
 	}
-
 	return alerts, nil
 }

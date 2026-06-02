@@ -65,6 +65,19 @@ type Product struct {
 	UpdatedAt      time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
+// LowStockItem is one product×size row returned by the inventory API.
+type LowStockItem struct {
+	ProductID primitive.ObjectID `bson:"product_id" json:"product_id"`
+	Name      string             `bson:"name"       json:"name"`
+	SKU       string             `bson:"sku"        json:"sku"`
+	Size      string             `bson:"size"       json:"size"`
+	Stock     int                `bson:"stock"      json:"stock"`
+	Price     float64            `bson:"price"      json:"price"`
+	PriceINR  *float64           `bson:"price_inr,omitempty" json:"price_inr,omitempty"`
+	Category  string             `bson:"category"   json:"category"`
+	Image     string             `bson:"image"      json:"image"`
+}
+
 // Category represents a product category
 type Category struct {
 	ID            primitive.ObjectID `bson:"_id" json:"id"`

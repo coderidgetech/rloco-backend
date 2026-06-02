@@ -29,7 +29,9 @@ func (h *InventoryHandler) GetLowStock(c *gin.Context) {
 }
 
 func (h *InventoryHandler) GetAlerts(c *gin.Context) {
-	alerts, err := h.inventoryService.GetStockAlerts(c.Request.Context())
+	threshold, _ := strconv.Atoi(c.DefaultQuery("threshold", "10"))
+
+	alerts, err := h.inventoryService.GetStockAlerts(c.Request.Context(), threshold)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

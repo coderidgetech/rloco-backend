@@ -32,6 +32,9 @@ type ProductRepository interface {
 	SetVariantGroup(ctx context.Context, productID primitive.ObjectID, groupID primitive.ObjectID, color string, isMain bool) error
 	UnsetVariantGroup(ctx context.Context, productID primitive.ObjectID) error
 	BulkInsert(ctx context.Context, products []*models.Product) error
+	// LowStockItems returns one row per product×size whose stock is ≤ threshold,
+	// filtered at the DB level via an aggregation pipeline.
+	LowStockItems(ctx context.Context, threshold int) ([]models.LowStockItem, error)
 }
 
 type productRepository struct {
@@ -316,6 +319,52 @@ func (r *productRepository) UnsetVariantGroup(ctx context.Context, productID pri
 		},
 	)
 	return err
+}
+
+func (r *productRepository) LowStockItems(ctx context.Context, threshold int) ([]models.LowStockItem, error) {
+	pipeline := mongo.Pipeline{
+		// Explode the stock map into an array of {k: size, v: qty} pairs.
+		{{Key: "$addFields", Value: bson.D{
+			{Key: "stockArray", Value: bson.D{
+				{Key: "$objectToArray", Value: "$stock"},
+			}},
+		}}},
+		// One document per size.
+		{{Key: "$unwind", Value: "$stockArray"}},
+		// Keep only sizes whose qty ≤ threshold.
+		{{Key: "$match", Value: bson.D{
+			{Key: "stockArray.v", Value: bson.D{{Key: "$lte", Value: threshold}}},
+		}}},
+		// Project the fields the service/handler need.
+		{{Key: "$project", Value: bson.D{
+			{Key: "_id", Value: 0},
+			{Key: "product_id", Value: "$_id"},
+			{Key: "name", Value: 1},
+			{Key: "sku", Value: 1},
+			{Key: "size", Value: "$stockArray.k"},
+			{Key: "stock", Value: "$stockArray.v"},
+			{Key: "price", Value: 1},
+			{Key: "price_inr", Value: 1},
+			{Key: "category", Value: 1},
+			{Key: "image", Value: bson.D{
+				{Key: "$arrayElemAt", Value: bson.A{"$images", 0}},
+			}},
+		}}},
+		// Sort cheapest-stock first so the worst offenders appear at the top.
+		{{Key: "$sort", Value: bson.D{{Key: "stock", Value: 1}}}},
+	}
+
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var items []models.LowStockItem
+	if err := cursor.All(ctx, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (r *productRepository) BulkInsert(ctx context.Context, products []*models.Product) error {
