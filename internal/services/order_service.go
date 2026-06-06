@@ -16,7 +16,7 @@ import (
 )
 
 type OrderService interface {
-	Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64) (*models.Order, error)
+	Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64, selectedCarrier, selectedService string) (*models.Order, error)
 	CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string) (*models.Order, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*models.Order, error)
 	GetByOrderNumber(ctx context.Context, orderNumber string) (*models.Order, error)
@@ -83,7 +83,7 @@ func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo reposi
 	}
 }
 
-func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64) (*models.Order, error) {
+func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64, selectedCarrier, selectedService string) (*models.Order, error) {
 	// Never persist card-like data in orders; keep only non-sensitive payment hints.
 	safePaymentInfo := models.PaymentInfo{
 		UPIID:      paymentInfo.UPIID,
@@ -164,7 +164,9 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	if inrPer <= 0 {
 		inrPer = 75
 	}
-	var selectedCarrier, selectedService string
+	// persistedCarrier/Service record which rate the order was priced/charged for, so
+	// fulfillment re-quotes and buys that same rate instead of the cheapest.
+	var persistedCarrier, persistedService string
 	if s.shippingService != nil {
 		methods, err := s.shippingService.CalculateShipping(ctx, ShippingQuoteRequest{
 			Country:    shippingInfo.Country,
@@ -180,12 +182,22 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 			Weight:     &weightPtr,
 		})
 		if err == nil && len(methods) > 0 {
+			// Honor the customer's chosen rate when supplied; otherwise default to the
+			// cheapest (methods are sorted ascending by cost).
+			chosen := methods[0]
+			if strings.TrimSpace(selectedCarrier) != "" || strings.TrimSpace(selectedService) != "" {
+				for _, m := range methods {
+					if strings.EqualFold(strings.TrimSpace(m.Carrier), strings.TrimSpace(selectedCarrier)) &&
+						strings.EqualFold(strings.TrimSpace(m.Name), strings.TrimSpace(selectedService)) {
+						chosen = m
+						break
+					}
+				}
+			}
 			// Orders are still stored in USD internally, so normalize INR quotes.
-			shippingCost = normalizeShippingCostUSD(methods[0].BaseCost, methods[0].Currency, inrPer)
-			// Remember which carrier/service this price represents so fulfillment can
-			// re-quote and buy the same rate rather than blindly picking the cheapest.
-			selectedCarrier = methods[0].Carrier
-			selectedService = methods[0].Name
+			shippingCost = normalizeShippingCostUSD(chosen.BaseCost, chosen.Currency, inrPer)
+			persistedCarrier = chosen.Carrier
+			persistedService = chosen.Name
 		}
 	}
 
@@ -257,8 +269,8 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		PaymentMethod: paymentMethod,
 		PaymentStatus: "pending",
 		PromotionCode: promotionCode,
-		ShippingCarrier:  selectedCarrier,
-		ShippingService:  selectedService,
+		ShippingCarrier:  persistedCarrier,
+		ShippingService:  persistedService,
 		ShippingWeightLb: orderWeightLb,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
@@ -355,7 +367,7 @@ func (s *orderService) CreateGuestOrder(ctx context.Context, guestEmail, guestNa
 			shippingInfo.LastName = parts[1]
 		}
 	}
-	order, err := s.Create(ctx, primitive.ObjectID{}, items, shippingInfo, models.PaymentInfo{}, paymentMethod, promotionCode, 0)
+	order, err := s.Create(ctx, primitive.ObjectID{}, items, shippingInfo, models.PaymentInfo{}, paymentMethod, promotionCode, 0, "", "")
 	if err != nil {
 		return nil, err
 	}

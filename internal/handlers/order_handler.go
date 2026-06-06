@@ -394,6 +394,8 @@ func (h *OrderHandler) Create(c *gin.Context) {
 		PaymentMethod      string              `json:"payment_method" binding:"required"`
 		PromotionCode      *string             `json:"promotion_code,omitempty"`
 		GiftPackingCharge  float64             `json:"gift_packing_charge"` // Optional; e.g. 50 per gift item
+		ShippingCarrier    string              `json:"shipping_carrier,omitempty"` // Customer-selected rate (carrier)
+		ShippingService    string              `json:"shipping_service,omitempty"` // Customer-selected rate (service level)
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -420,7 +422,7 @@ func (h *OrderHandler) Create(c *gin.Context) {
 		return
 	}
 
-	order, err := h.orderService.Create(c.Request.Context(), id, req.Items, req.ShippingInfo, req.PaymentInfo, req.PaymentMethod, req.PromotionCode, req.GiftPackingCharge)
+	order, err := h.orderService.Create(c.Request.Context(), id, req.Items, req.ShippingInfo, req.PaymentInfo, req.PaymentMethod, req.PromotionCode, req.GiftPackingCharge, req.ShippingCarrier, req.ShippingService)
 	if err != nil {
 		if h.idempotency != nil && idemKey != "" {
 			_ = h.idempotency.Release(c.Request.Context(), id, idemKey)
