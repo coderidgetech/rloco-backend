@@ -134,7 +134,12 @@ func (h *PaymentHandler) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	signature := c.GetHeader("X-Stripe-Signature")
+	// Stripe sends the signature in the "Stripe-Signature" header (no X- prefix).
+	signature := c.GetHeader("Stripe-Signature")
+	if signature == "" {
+		// Tolerate the legacy/non-standard header name if a proxy rewrites it.
+		signature = c.GetHeader("X-Stripe-Signature")
+	}
 
 	if err := h.paymentService.HandleWebhook(c.Request.Context(), gateway, payload, signature); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

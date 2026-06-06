@@ -18,6 +18,10 @@ type OrderRepository interface {
 	GetByUserID(ctx context.Context, userID primitive.ObjectID, limit, skip int) ([]*models.Order, int64, error)
 	Update(ctx context.Context, id primitive.ObjectID, order *models.Order) error
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
+	UpdatePaymentStatus(ctx context.Context, id primitive.ObjectID, paymentStatus string) error
+	// CompareAndSwapPaymentStatus atomically moves payment_status from->to, returning
+	// true only for the caller that won the transition (used to guard refunds).
+	CompareAndSwapPaymentStatus(ctx context.Context, id primitive.ObjectID, from, to string) (bool, error)
 	SetTrackingNumber(ctx context.Context, id primitive.ObjectID, trackingNumber, labelURL string) error
 	GetByTrackingNumber(ctx context.Context, trackingNumber string) (*models.Order, error)
 	List(ctx context.Context, filter bson.M, limit, skip int) ([]*models.Order, int64, error)
@@ -108,6 +112,33 @@ func (r *orderRepository) UpdateStatus(ctx context.Context, id primitive.ObjectI
 		}},
 	)
 	return err
+}
+
+func (r *orderRepository) UpdatePaymentStatus(ctx context.Context, id primitive.ObjectID, paymentStatus string) error {
+	_, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{
+			"payment_status": paymentStatus,
+			"updated_at":     time.Now(),
+		}},
+	)
+	return err
+}
+
+func (r *orderRepository) CompareAndSwapPaymentStatus(ctx context.Context, id primitive.ObjectID, from, to string) (bool, error) {
+	res, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": id, "payment_status": from},
+		bson.M{"$set": bson.M{
+			"payment_status": to,
+			"updated_at":     time.Now(),
+		}},
+	)
+	if err != nil {
+		return false, err
+	}
+	return res.ModifiedCount == 1, nil
 }
 
 func (r *orderRepository) List(ctx context.Context, filter bson.M, limit, skip int) ([]*models.Order, int64, error) {

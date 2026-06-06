@@ -106,11 +106,16 @@ type Order struct {
 	GiftPackingCharge float64            `bson:"gift_packing_charge" json:"gift_packing_charge"` // Sum of gift packing (e.g. 50 per gift item)
 	Tax              float64            `bson:"tax" json:"tax"`
 	Total            float64            `bson:"total" json:"total"`
-	Status         string             `bson:"status" json:"status"` // "pending", "processing", "shipped", "delivered", "cancelled"
+	Status         string             `bson:"status" json:"status"` // "pending", "processing", "shipped", "delivered", "cancelled", "returned"
 	PaymentMethod  string             `bson:"payment_method" json:"payment_method"`
-	PaymentStatus  string             `bson:"payment_status" json:"payment_status"` // "pending", "paid", "failed"
+	PaymentStatus  string             `bson:"payment_status" json:"payment_status"` // "pending", "paid", "failed", "refunded"
 	TrackingNumber      *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
 	LabelURL            *string            `bson:"label_url,omitempty" json:"label_url,omitempty"`
+	// Shipping selection captured at checkout so fulfillment buys the same rate the
+	// customer was charged for, at the order's real weight (not the cheapest available).
+	ShippingCarrier  string  `bson:"shipping_carrier,omitempty" json:"shipping_carrier,omitempty"`
+	ShippingService  string  `bson:"shipping_service,omitempty" json:"shipping_service,omitempty"`
+	ShippingWeightLb float64 `bson:"shipping_weight_lb,omitempty" json:"shipping_weight_lb,omitempty"`
 	PromotionCode       *string            `bson:"promotion_code,omitempty" json:"promotion_code,omitempty"`
 	RewardPointsApplied int64              `bson:"reward_points_applied,omitempty" json:"reward_points_applied,omitempty"`
 	CreatedAt           time.Time          `bson:"created_at" json:"created_at"`

@@ -124,6 +124,8 @@ func main() {
 	inventoryService := services.NewInventoryService(productRepo)
 	supportService := services.NewSupportService(supportRepo)
 	paymentService := services.NewPaymentService(paymentRepo, orderRepo, emailService, stripeWebhookEventRepo, cfg.StripeSecretKey, cfg.StripeWebhookSecret)
+	// Allow the order service to refund paid orders that are cancelled.
+	orderService.AttachRefunder(paymentRepo, paymentService)
 	returnService := services.NewReturnService(returnRepo, orderRepo, productRepo, paymentRepo, paymentService, emailService)
 	videoService := services.NewVideoService(videoRepo)
 	addressService := services.NewAddressService(addressRepo)
@@ -132,7 +134,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.GoogleClientID, cfg.GoogleMapsBrowserKey)
 	productHandler := handlers.NewProductHandler(productService, storageService, advancedAnalyticsRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
-	orderHandler := handlers.NewOrderHandler(orderService, productService, orderIdempotencyRepo)
+	orderHandler := handlers.NewOrderHandler(orderService, productService, orderIdempotencyRepo, configService)
 	cartHandler := handlers.NewCartHandler(cartService)
 	wishlistHandler := handlers.NewWishlistHandler(wishlistService)
 	promotionHandler := handlers.NewPromotionHandler(promotionService)

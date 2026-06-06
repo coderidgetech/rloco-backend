@@ -76,8 +76,13 @@ func (s *shippingService) FulfillShipment(ctx context.Context, order *models.Ord
 		Zip:     strings.TrimSpace(order.ShippingInfo.ZipCode),
 		Country: normalizeCountryCode(order.ShippingInfo.Country),
 	}
+	// Validate the destination before buying a label (best-effort; only blocks on a
+	// definitive invalid result so a validation outage never stops fulfillment).
+	if ok, msg := s.shippo.validateAddress(ctx, destination); !ok {
+		return "", "", fmt.Errorf("shipping address failed validation: %s", msg)
+	}
 	w := weightLb
-	return s.shippo.purchaseLabel(ctx, destination, &w)
+	return s.shippo.purchaseLabel(ctx, destination, &w, order.ShippingCarrier, order.ShippingService)
 }
 
 func (s *shippingService) CalculateShipping(ctx context.Context, req ShippingQuoteRequest) ([]*models.ShippingMethod, error) {

@@ -19,14 +19,66 @@ type OrderHandler struct {
 	orderService   services.OrderService
 	productService services.ProductService
 	idempotency    repositories.OrderIdempotencyRepository
+	configService  services.ConfigService
 }
 
-func NewOrderHandler(orderService services.OrderService, productService services.ProductService, idempotency repositories.OrderIdempotencyRepository) *OrderHandler {
+func NewOrderHandler(orderService services.OrderService, productService services.ProductService, idempotency repositories.OrderIdempotencyRepository, configService services.ConfigService) *OrderHandler {
 	return &OrderHandler{
 		orderService:   orderService,
 		productService: productService,
 		idempotency:    idempotency,
+		configService:  configService,
 	}
+}
+
+// marketFromCountry maps a shipping country to a region/market code (US or IN).
+func marketFromCountry(country string) string {
+	switch strings.ToLower(strings.TrimSpace(country)) {
+	case "united states", "us", "usa":
+		return "US"
+	case "india", "in":
+		return "IN"
+	default:
+		return ""
+	}
+}
+
+// regionAvailability resolves whether a market is open for orders from the live
+// SiteConfig (falling back to defaults), returning the coming-soon message when not.
+// It fails open only when the regions config is entirely absent, so an unconfigured
+// deployment behaves as before rather than rejecting every order.
+func (h *OrderHandler) regionAvailability(ctx context.Context, country string) (enabled bool, message string) {
+	market := marketFromCountry(country)
+	if market == "" {
+		return true, ""
+	}
+
+	cfg := getDefaultConfig()
+	if h.configService != nil {
+		if stored, err := h.configService.Get(ctx); err == nil && stored != nil && len(stored.Config) > 0 {
+			// ensureRegionDefaults backfills regions for configs predating gating.
+			cfg = ensureRegionDefaults(stored.Config)
+		}
+	}
+
+	general, ok := cfg["general"].(map[string]interface{})
+	if !ok {
+		return true, ""
+	}
+	regions, ok := general["regions"].(map[string]interface{})
+	if !ok {
+		return true, ""
+	}
+	region, ok := regions[market].(map[string]interface{})
+	if !ok {
+		return true, ""
+	}
+	en, ok := region["enabled"].(bool)
+	if !ok {
+		return true, ""
+	}
+	msg, _ := region["comingSoonMessage"].(string)
+	return en, msg
 }
 
 // getVendorProductIDs gets all product IDs for a vendor
@@ -356,6 +408,18 @@ func (h *OrderHandler) Create(c *gin.Context) {
 		req.GiftPackingCharge = 0
 	}
 
+	// Region gating: refuse orders shipping to a region that isn't open yet.
+	if enabled, msg := h.regionAvailability(c.Request.Context(), req.ShippingInfo.Country); !enabled {
+		if h.idempotency != nil && idemKey != "" {
+			_ = h.idempotency.Release(c.Request.Context(), id, idemKey)
+		}
+		if msg == "" {
+			msg = "Orders are not available in this region yet."
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": msg, "code": "region_unavailable"})
+		return
+	}
+
 	order, err := h.orderService.Create(c.Request.Context(), id, req.Items, req.ShippingInfo, req.PaymentInfo, req.PaymentMethod, req.PromotionCode, req.GiftPackingCharge)
 	if err != nil {
 		if h.idempotency != nil && idemKey != "" {
@@ -382,6 +446,14 @@ func (h *OrderHandler) CreateGuest(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// Region gating: refuse orders shipping to a region that isn't open yet.
+	if enabled, msg := h.regionAvailability(c.Request.Context(), req.ShippingInfo.Country); !enabled {
+		if msg == "" {
+			msg = "Orders are not available in this region yet."
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": msg, "code": "region_unavailable"})
 		return
 	}
 	order, err := h.orderService.CreateGuestOrder(c.Request.Context(), req.GuestEmail, req.GuestName, req.Items, req.ShippingInfo, "cod", req.PromotionCode)

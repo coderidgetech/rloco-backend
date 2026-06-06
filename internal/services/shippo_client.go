@@ -309,7 +309,7 @@ func firstNonEmpty(values ...string) string {
 
 // purchaseLabel re-quotes rates for the destination and purchases the cheapest one,
 // returning the tracking number and label PDF URL from Shippo.
-func (c *shippoClient) purchaseLabel(ctx context.Context, destination shippoAddress, weightLb *float64) (trackingNumber, labelURL string, err error) {
+func (c *shippoClient) purchaseLabel(ctx context.Context, destination shippoAddress, weightLb *float64, preferredCarrier, preferredService string) (trackingNumber, labelURL string, err error) {
 	if !c.canQuote() {
 		return "", "", fmt.Errorf("shippo is not fully configured")
 	}
@@ -351,13 +351,17 @@ func (c *shippoClient) purchaseLabel(ctx context.Context, destination shippoAddr
 		return "", "", fmt.Errorf("shippo returned no rates for destination")
 	}
 
-	// pick cheapest rate
-	best := shipment.Rates[0]
-	bestCost, _ := strconv.ParseFloat(best.Amount, 64)
-	for _, r := range shipment.Rates[1:] {
-		if cost, err2 := strconv.ParseFloat(r.Amount, 64); err2 == nil && cost < bestCost {
-			best = r
-			bestCost = cost
+	// Prefer the rate the customer was quoted/charged for (matching carrier + service
+	// level); fall back to the cheapest if that rate is no longer offered.
+	best, matched := selectPreferredRate(shipment.Rates, preferredCarrier, preferredService)
+	if !matched {
+		best = shipment.Rates[0]
+		bestCost, _ := strconv.ParseFloat(best.Amount, 64)
+		for _, r := range shipment.Rates[1:] {
+			if cost, err2 := strconv.ParseFloat(r.Amount, 64); err2 == nil && cost < bestCost {
+				best = r
+				bestCost = cost
+			}
 		}
 	}
 
@@ -397,6 +401,77 @@ func (c *shippoClient) purchaseLabel(ctx context.Context, destination shippoAddr
 	}
 
 	return tx.TrackingNumber, tx.LabelURL, nil
+}
+
+// selectPreferredRate returns the rate matching the requested carrier and service
+// level. Matching is case-insensitive; carrier compares against the normalized
+// provider and service compares against the service-level name. Returns matched=false
+// when no preference is given or no rate matches.
+func selectPreferredRate(rates []shippoRate, preferredCarrier, preferredService string) (shippoRate, bool) {
+	carrier := strings.TrimSpace(strings.ToLower(preferredCarrier))
+	service := strings.TrimSpace(strings.ToLower(preferredService))
+	if carrier == "" && service == "" {
+		return shippoRate{}, false
+	}
+	for _, r := range rates {
+		// normalizeCarrier already lower-cases; also match the raw provider name.
+		carrierOK := carrier == "" ||
+			normalizeCarrier(r.Provider) == carrier ||
+			strings.ToLower(strings.TrimSpace(r.Provider)) == carrier
+		serviceOK := service == "" ||
+			strings.ToLower(strings.TrimSpace(r.ServiceLevel.Name)) == service
+		if carrierOK && serviceOK {
+			return r, true
+		}
+	}
+	return shippoRate{}, false
+}
+
+// validateAddress runs a destination address through Shippo's validation service.
+// It is best-effort: on transport/parse errors it returns (true, "") so callers do
+// not block fulfillment on a validation outage.
+func (c *shippoClient) validateAddress(ctx context.Context, addr shippoAddress) (valid bool, message string) {
+	if c == nil || c.apiKey == "" || c.baseURL == "" {
+		return true, ""
+	}
+	payload := struct {
+		shippoAddress
+		Validate bool `json:"validate"`
+	}{shippoAddress: addr, Validate: true}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return true, ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/addresses/", bytes.NewReader(body))
+	if err != nil {
+		return true, ""
+	}
+	req.Header.Set("Authorization", "ShippoToken "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return true, ""
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return true, ""
+	}
+	var result struct {
+		ValidationResults struct {
+			IsValid  bool                `json:"is_valid"`
+			Messages []shippoErrorDetail `json:"messages"`
+		} `json:"validation_results"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return true, ""
+	}
+	// Shippo omits validation_results when the carrier doesn't support validation;
+	// treat the absence (no messages, not flagged invalid) as a pass.
+	if !result.ValidationResults.IsValid && len(result.ValidationResults.Messages) > 0 {
+		return false, firstShippoMessage(result.ValidationResults.Messages)
+	}
+	return true, ""
 }
 
 func sortShippingMethodsByCost(methods []*models.ShippingMethod) {

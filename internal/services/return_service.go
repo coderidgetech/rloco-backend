@@ -208,7 +208,7 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 	}
 
 	// COD / manual refunds: no card transaction to reverse.
-	if orderForRefund.PaymentMethod != "cod" {
+	if !isCODPaymentMethod(orderForRefund.PaymentMethod) {
 		transaction, txErr := s.paymentRepo.GetByOrderID(ctx, returnReq.OrderID)
 		if txErr != nil || transaction == nil {
 			return errors.New("no payment transaction found for gateway refund")
@@ -220,6 +220,7 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 		if err := s.paymentService.RefundPayment(ctx, transaction.ID, &amount); err != nil {
 			return fmt.Errorf("gateway refund failed: %w", err)
 		}
+		_ = s.orderRepo.UpdatePaymentStatus(ctx, returnReq.OrderID, "refunded")
 	}
 
 	// Update refund method and status
@@ -229,6 +230,14 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 
 	if err := s.returnRepo.Update(ctx, id, returnReq); err != nil {
 		return err
+	}
+
+	// Reflect the refund back onto the parent order so it no longer reads as
+	// "delivered"/"shipped" once the items have been returned and refunded. Only the
+	// post-fulfillment states can transition to "returned"; guard here because this
+	// uses the raw repository (the return service has no OrderService dependency).
+	if orderForRefund.Status == "shipped" || orderForRefund.Status == "delivered" {
+		_ = s.orderRepo.UpdateStatus(ctx, returnReq.OrderID, "returned")
 	}
 
 	// Send refund notification email (async)

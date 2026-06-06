@@ -30,6 +30,9 @@ type OrderService interface {
 	AddTrackingUpdate(ctx context.Context, orderID primitive.ObjectID, status, location, description string, trackingNumber *string) error
 	List(ctx context.Context, filter map[string]interface{}, limit, skip int) ([]*models.Order, int64, error)
 	GetStats(ctx context.Context, startDate, endDate time.Time) (map[string]interface{}, error)
+	// AttachRefunder wires the payment collaborators used to refund paid orders on
+	// cancellation. Optional: when unset, cancelling a paid order skips the gateway refund.
+	AttachRefunder(paymentRepo repositories.PaymentRepository, paymentService PaymentService)
 }
 
 // OrderCheckoutPricing holds env-driven defaults for order totals (see config.Config ORDER_* vars).
@@ -55,6 +58,10 @@ type orderService struct {
 	fcmService       *FCMService
 	userRepo         repositories.UserRepository
 	rewardsRepo      repositories.RewardsRepository
+	// Optional refund collaborators, attached after construction (see AttachRefunder)
+	// to avoid a construction-order cycle with PaymentService.
+	paymentRepo    repositories.PaymentRepository
+	paymentService PaymentService
 }
 
 func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo repositories.OrderTrackingRepository, productRepo repositories.ProductRepository, promotionRepo repositories.PromotionRepository, promotionService PromotionService, checkoutPricing OrderCheckoutPricing, emailService EmailService, shippingService ShippingService, taxService TaxService, stripeUS StripeUSTax, smsService *TwilioSMSService, fcmService *FCMService, userRepo repositories.UserRepository, rewardsRepo repositories.RewardsRepository) OrderService {
@@ -157,6 +164,7 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	if inrPer <= 0 {
 		inrPer = 75
 	}
+	var selectedCarrier, selectedService string
 	if s.shippingService != nil {
 		methods, err := s.shippingService.CalculateShipping(ctx, ShippingQuoteRequest{
 			Country:    shippingInfo.Country,
@@ -174,6 +182,10 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		if err == nil && len(methods) > 0 {
 			// Orders are still stored in USD internally, so normalize INR quotes.
 			shippingCost = normalizeShippingCostUSD(methods[0].BaseCost, methods[0].Currency, inrPer)
+			// Remember which carrier/service this price represents so fulfillment can
+			// re-quote and buy the same rate rather than blindly picking the cheapest.
+			selectedCarrier = methods[0].Carrier
+			selectedService = methods[0].Name
 		}
 	}
 
@@ -245,6 +257,9 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		PaymentMethod: paymentMethod,
 		PaymentStatus: "pending",
 		PromotionCode: promotionCode,
+		ShippingCarrier:  selectedCarrier,
+		ShippingService:  selectedService,
+		ShippingWeightLb: orderWeightLb,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	}
@@ -363,6 +378,13 @@ func normalizeSupportedCountry(input string) (string, bool) {
 	}
 }
 
+// isCODPaymentMethod reports whether a payment method is cash-on-delivery (which has
+// no gateway transaction to refund). Covers both stored spellings.
+func isCODPaymentMethod(method string) bool {
+	m := strings.ToLower(strings.TrimSpace(method))
+	return m == "cod" || m == "cash_on_delivery"
+}
+
 func orderMarketFromShippingCountry(country string) string {
 	norm, ok := normalizeSupportedCountry(country)
 	if !ok {
@@ -418,13 +440,54 @@ func (s *orderService) GetByUserID(ctx context.Context, userID primitive.ObjectI
 	return s.orderRepo.GetByUserID(ctx, userID, limit, skip)
 }
 
+// allowedOrderTransitions defines the legal order-status state machine. A status
+// may always transition to itself (idempotent webhooks/retries).
+var allowedOrderTransitions = map[string][]string{
+	"pending":    {"processing", "shipped", "cancelled"},
+	"processing": {"shipped", "delivered", "cancelled"},
+	"shipped":    {"delivered", "returned"},
+	"delivered":  {"returned"},
+	"cancelled":  {},
+	"returned":   {},
+}
+
+// isValidOrderStatusTransition reports whether moving from->to is permitted.
+func isValidOrderStatusTransition(from, to string) bool {
+	if from == to {
+		return true
+	}
+	allowed, ok := allowedOrderTransitions[from]
+	if !ok {
+		// Unknown current status: only allow moving to a recognised status.
+		_, known := allowedOrderTransitions[to]
+		return known
+	}
+	for _, candidate := range allowed {
+		if candidate == to {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *orderService) UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error {
 	order, err := s.orderRepo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 
+	status = strings.ToLower(strings.TrimSpace(status))
+	if _, known := allowedOrderTransitions[status]; !known {
+		return fmt.Errorf("invalid order status %q", status)
+	}
+	if !isValidOrderStatusTransition(order.Status, status) {
+		return fmt.Errorf("illegal order status transition: %q -> %q", order.Status, status)
+	}
+
 	oldStatus := order.Status
+	if status == oldStatus {
+		return nil
+	}
 	if err := s.orderRepo.UpdateStatus(ctx, id, status); err != nil {
 		return err
 	}
@@ -476,11 +539,12 @@ func (s *orderService) FulfillOrder(ctx context.Context, id primitive.ObjectID) 
 	if err != nil {
 		return nil, err
 	}
-	if order.Status == "shipped" || order.Status == "delivered" || order.Status == "cancelled" {
+	if order.Status == "shipped" || order.Status == "delivered" || order.Status == "cancelled" || order.Status == "returned" {
 		return nil, fmt.Errorf("order cannot be fulfilled in status %q", order.Status)
 	}
 
-	trackingNumber, labelURL, err := s.shippingService.FulfillShipment(ctx, order, 0)
+	// Fulfill at the order's real captured weight (falls back to carrier default if 0).
+	trackingNumber, labelURL, err := s.shippingService.FulfillShipment(ctx, order, order.ShippingWeightLb)
 	if err != nil {
 		return nil, fmt.Errorf("carrier label purchase failed: %w", err)
 	}
@@ -495,6 +559,11 @@ func (s *orderService) FulfillOrder(ctx context.Context, id primitive.ObjectID) 
 	}
 
 	return s.orderRepo.GetByID(ctx, id)
+}
+
+func (s *orderService) AttachRefunder(paymentRepo repositories.PaymentRepository, paymentService PaymentService) {
+	s.paymentRepo = paymentRepo
+	s.paymentService = paymentService
 }
 
 func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID primitive.ObjectID, reason string) error {
@@ -526,8 +595,48 @@ func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID
 		}
 	}
 
+	// Refund a paid (non-COD) order through the gateway so cancelled-after-payment
+	// doesn't leave the customer charged. An atomic paid->refunding claim ensures
+	// only one concurrent cancel can trigger the refund (no double-refund).
+	if order.PaymentStatus == "paid" && !isCODPaymentMethod(order.PaymentMethod) && s.paymentService != nil && s.paymentRepo != nil {
+		claimed, claimErr := s.orderRepo.CompareAndSwapPaymentStatus(ctx, id, "paid", "refunding")
+		if claimErr != nil {
+			return fmt.Errorf("cancellation refund claim failed: %w", claimErr)
+		}
+		if claimed {
+			tx, txErr := s.paymentRepo.GetByOrderID(ctx, id)
+			if txErr == nil && tx != nil && tx.Status == "success" {
+				if refundErr := s.paymentService.RefundPayment(ctx, tx.ID, nil); refundErr != nil {
+					// Release the claim so the cancel can be retried.
+					_ = s.orderRepo.UpdatePaymentStatus(ctx, id, "paid")
+					return fmt.Errorf("cancellation refund failed: %w", refundErr)
+				}
+				_ = s.orderRepo.UpdatePaymentStatus(ctx, id, "refunded")
+			} else {
+				// No gateway transaction to reverse; leave it marked refunded.
+				_ = s.orderRepo.UpdatePaymentStatus(ctx, id, "refunded")
+			}
+		}
+	}
+
 	if err := s.orderRepo.UpdateStatus(ctx, id, "cancelled"); err != nil {
 		return err
+	}
+
+	// Reverse reward points earned at order creation (1 pt per $1), only after the
+	// order is confirmed cancelled. Recorded as a "redeemed" transaction so the
+	// balance (earned - redeemed) nets back out. Reference matches the earn record.
+	if s.rewardsRepo != nil {
+		if pts := int64(order.Total); pts > 0 {
+			_ = s.rewardsRepo.AddTransaction(ctx, &models.RewardsTransaction{
+				UserID:      order.UserID,
+				Type:        "redeemed",
+				Points:      pts,
+				Reference:   order.ID.Hex(),
+				Description: "Points reversed for cancelled order " + order.OrderNumber,
+				CreatedAt:   time.Now(),
+			})
+		}
 	}
 
 	// Add tracking update

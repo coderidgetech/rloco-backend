@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"rloco-backend/internal/repositories"
 	"rloco-backend/internal/services"
@@ -183,22 +182,40 @@ func (h *ShippingWebhookHandler) processTrackingEvent(
 		return
 	}
 
+	normalised := strings.ToUpper(strings.TrimSpace(status))
+
+	// Carriers retry webhooks and re-send the same event; skip if any prior tracking
+	// update already records this status+description to avoid duplicate entries.
+	if existing, derr := h.orderService.GetTrackingUpdates(ctx, order.ID); derr == nil {
+		for _, u := range existing {
+			if strings.EqualFold(strings.TrimSpace(u.Status), strings.TrimSpace(status)) &&
+				strings.EqualFold(strings.TrimSpace(u.Description), strings.TrimSpace(description)) {
+				c.Status(http.StatusNoContent)
+				return
+			}
+		}
+	}
+
 	tn := trackingNumber
 	_ = h.orderService.AddTrackingUpdate(ctx, order.ID, status, location, description, &tn)
 
 	// Notify the customer for meaningful milestones
-	normalised := strings.ToUpper(strings.TrimSpace(status))
 	switch normalised {
 	case "TRANSIT", "IN TRANSIT", "IN_TRANSIT", "DELIVERED", "DELIVERY EXCEPTION", "FAILED":
 		_ = h.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order.OrderNumber, status)
 	}
 
-	// If carrier confirms delivery, advance the order status
-	if normalised == "DELIVERED" {
-		orderID, err := primitive.ObjectIDFromHex(order.ID.Hex())
-		if err == nil {
-			_ = h.orderService.UpdateStatus(ctx, orderID, "delivered")
+	// Advance order status from carrier signals. UpdateStatus enforces legal
+	// transitions, so a no-op (e.g. an in-transit ping on an already-shipped order)
+	// is harmless.
+	switch normalised {
+	case "TRANSIT", "IN TRANSIT", "IN_TRANSIT":
+		// Carrier has the parcel but admin fulfillment may not have flipped status yet.
+		if order.Status == "pending" || order.Status == "processing" {
+			_ = h.orderService.UpdateStatus(ctx, order.ID, "shipped")
 		}
+	case "DELIVERED":
+		_ = h.orderService.UpdateStatus(ctx, order.ID, "delivered")
 	}
 
 	c.Status(http.StatusNoContent)

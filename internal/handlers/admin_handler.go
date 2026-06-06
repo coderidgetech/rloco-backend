@@ -639,6 +639,19 @@ func getDefaultConfig() map[string]interface{} {
 			"autoDetectLocation": true,
 			"maintenanceMode":    false,
 			"maintenanceMessage": "We're currently performing scheduled maintenance. We'll be back soon!",
+			// Region availability. Clients gate the storefront/checkout on this; the
+			// backend also rejects orders shipping to a disabled region (see order flow).
+			"regions": map[string]interface{}{
+				"US": map[string]interface{}{
+					"enabled": true,
+					"status":  "live",
+				},
+				"IN": map[string]interface{}{
+					"enabled":           false,
+					"status":            "coming_soon",
+					"comingSoonMessage": "We're launching in India soon. Stay tuned!",
+				},
+			},
 		},
 		"design": map[string]interface{}{
 			"colors": map[string]interface{}{
@@ -877,6 +890,39 @@ func filterPublicSiteConfig(src map[string]interface{}) map[string]interface{} {
 	return out
 }
 
+// ensureRegionDefaults returns a config with the default general.regions block
+// injected when missing, so deployments whose stored config predates region gating
+// still gate correctly without an admin re-saving. Non-mutating: it shallow-copies
+// only the maps it needs to touch and leaves the input untouched.
+func ensureRegionDefaults(cfg map[string]interface{}) map[string]interface{} {
+	if cfg == nil {
+		return cfg
+	}
+	general, ok := cfg["general"].(map[string]interface{})
+	if !ok {
+		return cfg
+	}
+	if _, has := general["regions"]; has {
+		return cfg
+	}
+	dg, ok := getDefaultConfig()["general"].(map[string]interface{})
+	if !ok {
+		return cfg
+	}
+	newGeneral := make(map[string]interface{}, len(general)+1)
+	for k, v := range general {
+		newGeneral[k] = v
+	}
+	newGeneral["regions"] = dg["regions"]
+
+	out := make(map[string]interface{}, len(cfg))
+	for k, v := range cfg {
+		out[k] = v
+	}
+	out["general"] = newGeneral
+	return out
+}
+
 // GetPublicConfig returns public site configuration (customer-facing data only)
 // Uses the same logic as GetConfiguration but is public (no auth required)
 func (h *AdminHandler) GetPublicConfig(c *gin.Context) {
@@ -889,7 +935,7 @@ func (h *AdminHandler) GetPublicConfig(c *gin.Context) {
 		c.JSON(http.StatusOK, filterPublicSiteConfig(getDefaultConfig()))
 		return
 	}
-	c.JSON(http.StatusOK, filterPublicSiteConfig(siteConfig.Config))
+	c.JSON(http.StatusOK, filterPublicSiteConfig(ensureRegionDefaults(siteConfig.Config)))
 }
 
 func (h *AdminHandler) GetPublicContent(c *gin.Context) {
