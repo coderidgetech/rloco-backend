@@ -445,6 +445,8 @@ func (h *OrderHandler) CreateGuest(c *gin.Context) {
 		Items         []models.OrderItem `json:"items" binding:"required"`
 		ShippingInfo  models.ShippingInfo `json:"shipping_info" binding:"required"`
 		PromotionCode *string             `json:"promotion_code,omitempty"`
+		ShippingCarrier string            `json:"shipping_carrier,omitempty"` // Customer-selected rate (carrier)
+		ShippingService string            `json:"shipping_service,omitempty"` // Customer-selected rate (service level)
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -458,7 +460,7 @@ func (h *OrderHandler) CreateGuest(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": msg, "code": "region_unavailable"})
 		return
 	}
-	order, err := h.orderService.CreateGuestOrder(c.Request.Context(), req.GuestEmail, req.GuestName, req.Items, req.ShippingInfo, "cod", req.PromotionCode)
+	order, err := h.orderService.CreateGuestOrder(c.Request.Context(), req.GuestEmail, req.GuestName, req.Items, req.ShippingInfo, "cod", req.PromotionCode, req.ShippingCarrier, req.ShippingService)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

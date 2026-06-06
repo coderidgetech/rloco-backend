@@ -17,7 +17,7 @@ import (
 
 type OrderService interface {
 	Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64, selectedCarrier, selectedService string) (*models.Order, error)
-	CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string) (*models.Order, error)
+	CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string, selectedCarrier, selectedService string) (*models.Order, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*models.Order, error)
 	GetByOrderNumber(ctx context.Context, orderNumber string) (*models.Order, error)
 	GetByUserID(ctx context.Context, userID primitive.ObjectID, limit, skip int) ([]*models.Order, int64, error)
@@ -343,7 +343,7 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	return order, nil
 }
 
-func (s *orderService) CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string) (*models.Order, error) {
+func (s *orderService) CreateGuestOrder(ctx context.Context, guestEmail, guestName string, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentMethod string, promotionCode *string, selectedCarrier, selectedService string) (*models.Order, error) {
 	if strings.TrimSpace(guestEmail) == "" {
 		return nil, errors.New("guest email is required")
 	}
@@ -367,7 +367,7 @@ func (s *orderService) CreateGuestOrder(ctx context.Context, guestEmail, guestNa
 			shippingInfo.LastName = parts[1]
 		}
 	}
-	order, err := s.Create(ctx, primitive.ObjectID{}, items, shippingInfo, models.PaymentInfo{}, paymentMethod, promotionCode, 0, "", "")
+	order, err := s.Create(ctx, primitive.ObjectID{}, items, shippingInfo, models.PaymentInfo{}, paymentMethod, promotionCode, 0, selectedCarrier, selectedService)
 	if err != nil {
 		return nil, err
 	}
