@@ -22,6 +22,21 @@ type OrderRepository interface {
 	// CompareAndSwapPaymentStatus atomically moves payment_status from->to, returning
 	// true only for the caller that won the transition (used to guard refunds).
 	CompareAndSwapPaymentStatus(ctx context.Context, id primitive.ObjectID, from, to string) (bool, error)
+	// CompareAndSwapStatus atomically moves status from->to, returning true only for
+	// the caller that won the transition (used by the abandoned-order sweeper so an
+	// order is cancelled — and its stock released — at most once).
+	CompareAndSwapStatus(ctx context.Context, id primitive.ObjectID, from, to string) (bool, error)
+	// FindAbandonedPending returns pending, unpaid, non-COD orders created before
+	// cutoff — checkouts that were started (stock reserved) but never paid.
+	FindAbandonedPending(ctx context.Context, cutoff time.Time, limit int) ([]*models.Order, error)
+	// ClaimForFulfillment atomically marks an order as being fulfilled by setting a
+	// sentinel tracking number, but only if no tracking number exists yet. Returns
+	// true for the single caller that wins the claim — guards concurrent fulfills
+	// from buying duplicate shipping labels.
+	ClaimForFulfillment(ctx context.Context, id primitive.ObjectID) (bool, error)
+	// ReleaseFulfillmentClaim clears the sentinel (only if still the sentinel) so a
+	// failed label purchase can be retried.
+	ReleaseFulfillmentClaim(ctx context.Context, id primitive.ObjectID) error
 	SetTrackingNumber(ctx context.Context, id primitive.ObjectID, trackingNumber, labelURL string) error
 	GetByTrackingNumber(ctx context.Context, trackingNumber string) (*models.Order, error)
 	List(ctx context.Context, filter bson.M, limit, skip int) ([]*models.Order, int64, error)
@@ -124,6 +139,38 @@ func (r *orderRepository) UpdatePaymentStatus(ctx context.Context, id primitive.
 		}},
 	)
 	return err
+}
+
+func (r *orderRepository) CompareAndSwapStatus(ctx context.Context, id primitive.ObjectID, from, to string) (bool, error) {
+	res, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": id, "status": from},
+		bson.M{"$set": bson.M{"status": to, "updated_at": time.Now()}},
+	)
+	if err != nil {
+		return false, err
+	}
+	return res.ModifiedCount == 1, nil
+}
+
+func (r *orderRepository) FindAbandonedPending(ctx context.Context, cutoff time.Time, limit int) ([]*models.Order, error) {
+	filter := bson.M{
+		"status":         "pending",
+		"payment_status": bson.M{"$ne": "paid"},
+		"payment_method": bson.M{"$nin": bson.A{"cod", "cash_on_delivery"}},
+		"created_at":     bson.M{"$lt": cutoff},
+	}
+	opts := options.Find().SetLimit(int64(limit)).SetSort(bson.M{"created_at": 1})
+	cur, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var orders []*models.Order
+	if err := cur.All(ctx, &orders); err != nil {
+		return nil, err
+	}
+	return orders, nil
 }
 
 func (r *orderRepository) CompareAndSwapPaymentStatus(ctx context.Context, id primitive.ObjectID, from, to string) (bool, error) {
@@ -234,6 +281,39 @@ func (r *orderRepository) GetStats(ctx context.Context, startDate, endDate time.
 	}
 
 	return result[0], nil
+}
+
+// FulfillmentClaimSentinel is written to tracking_number to reserve an order for
+// fulfillment before the (real) carrier tracking number is known. No carrier
+// emits this value, so it never matches a real tracking webhook.
+const FulfillmentClaimSentinel = "__FULFILLING__"
+
+func (r *orderRepository) ClaimForFulfillment(ctx context.Context, id primitive.ObjectID) (bool, error) {
+	res, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": id, "$or": []bson.M{
+			{"tracking_number": bson.M{"$exists": false}},
+			{"tracking_number": nil},
+			{"tracking_number": ""},
+		}},
+		bson.M{"$set": bson.M{
+			"tracking_number": FulfillmentClaimSentinel,
+			"updated_at":      time.Now(),
+		}},
+	)
+	if err != nil {
+		return false, err
+	}
+	return res.ModifiedCount == 1, nil
+}
+
+func (r *orderRepository) ReleaseFulfillmentClaim(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": id, "tracking_number": FulfillmentClaimSentinel},
+		bson.M{"$set": bson.M{"tracking_number": "", "updated_at": time.Now()}},
+	)
+	return err
 }
 
 func (r *orderRepository) SetTrackingNumber(ctx context.Context, id primitive.ObjectID, trackingNumber, labelURL string) error {

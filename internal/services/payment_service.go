@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 
@@ -70,7 +71,7 @@ func (s *paymentService) CreatePaymentIntent(ctx context.Context, requesterID pr
 	if requesterRole != "admin" && order.UserID != requesterID {
 		return nil, errors.New("access denied")
 	}
-	if order.PaymentMethod == "cod" {
+	if isCODPaymentMethod(order.PaymentMethod) {
 		return nil, errors.New("payment intent not applicable for cash on delivery orders")
 	}
 	if order.PaymentStatus == "paid" {
@@ -249,10 +250,17 @@ func (s *paymentService) markOrderPaidAfterGatewaySuccess(ctx context.Context, o
 	if err != nil {
 		return err
 	}
-	if order.PaymentMethod == "cod" {
+	if isCODPaymentMethod(order.PaymentMethod) {
 		return nil
 	}
 	if order.PaymentStatus == "paid" {
+		return nil
+	}
+	// Don't resurrect an order that was already cancelled (e.g. swept as abandoned).
+	// Its stock is released; marking it paid/processing here would ship un-reserved
+	// inventory. The webhook caller refunds; this also protects the synchronous path.
+	if order.Status == "cancelled" {
+		log.Printf("[PAYMENT][CRITICAL] gateway success for already-cancelled order %s — not marking paid; refund required", order.ID.Hex())
 		return nil
 	}
 	order.PaymentStatus = "paid"
@@ -304,6 +312,22 @@ func (s *paymentService) handleStripeWebhook(ctx context.Context, payload []byte
 			return err
 		}
 		if tx.Status == "success" {
+			return nil
+		}
+		// Late-payment race: if the order was already cancelled (e.g. swept as an
+		// abandoned unpaid order), its stock is released — don't resurrect/ship it.
+		// Record the gateway success and refund the customer instead.
+		if ord, gerr := s.orderRepo.GetByID(ctx, tx.OrderID); gerr == nil && ord != nil && ord.Status == "cancelled" {
+			// The payment did succeed at the gateway, so record it; then refund (one
+			// attempt). On refund failure, log CRITICAL for manual action rather than
+			// returning an error — a webhook retry would early-return on tx=success and
+			// never refund, silently leaving the customer charged.
+			_ = s.paymentRepo.UpdateStatus(ctx, tx.ID, "success", nil)
+			if rerr := s.RefundPayment(ctx, tx.ID, nil); rerr != nil {
+				log.Printf("[PAYMENT][CRITICAL] refund FAILED for already-cancelled order %s (tx %s): %v — MANUAL REFUND REQUIRED", tx.OrderID.Hex(), tx.ID.Hex(), rerr)
+			} else {
+				log.Printf("[PAYMENT] refunded late payment for already-cancelled order %s (tx %s)", tx.OrderID.Hex(), tx.ID.Hex())
+			}
 			return nil
 		}
 		if err = s.paymentRepo.UpdateStatus(ctx, tx.ID, "success", nil); err != nil {

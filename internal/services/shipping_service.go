@@ -52,9 +52,9 @@ func NewShippingService(shippingRepo repositories.ShippingRepository, shippo *sh
 }
 
 func (s *shippingService) FulfillShipment(ctx context.Context, order *models.Order, weightLb float64) (trackingNumber, labelURL string, err error) {
-	country := strings.ToUpper(strings.TrimSpace(order.ShippingInfo.Country))
-
-	if country == "IN" {
+	// India → Shiprocket, everything else → Shippo. Orders store the full country
+	// name ("India"), so match by CountryLooksIndia rather than an exact "IN".
+	if CountryLooksIndia(order.ShippingInfo.Country) {
 		if s.shiprocket == nil {
 			return "", "", fmt.Errorf("shiprocket is not configured for India shipments")
 		}

@@ -75,9 +75,14 @@ func (h *ShippingWebhookHandler) HandleShippoWebhook(c *gin.Context) {
 	}
 
 	if h.shippoSecret != "" {
-		sig := c.GetHeader("Shippo-Webhook-Signature")
-		if !verifyShippoSignature(body, sig, h.shippoSecret) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+		// Accept either a matching URL token (configure the Shippo dashboard URL as
+		// .../api/webhooks/shippo?token=SECRET) or a valid HMAC signature. Standard
+		// Shippo does not send the HMAC header, so the URL token is the practical way
+		// to secure this endpoint.
+		token := c.Query("token")
+		tokenOK := token != "" && hmac.Equal([]byte(token), []byte(h.shippoSecret))
+		if !tokenOK && !verifyShippoSignature(body, c.GetHeader("Shippo-Webhook-Signature"), h.shippoSecret) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature or token"})
 			return
 		}
 	}
