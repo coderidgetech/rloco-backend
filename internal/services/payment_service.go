@@ -320,7 +320,7 @@ func (s *paymentService) handleStripeWebhook(ctx context.Context, payload []byte
 			if err != nil {
 				return
 			}
-			_ = s.emailService.SendPaymentReceived(order.ShippingInfo.Email, order.OrderNumber, amt, cur)
+			_ = s.emailService.SendPaymentReceived(order.ShippingInfo.Email, order, amt, cur)
 		}()
 	case "payment_intent.payment_failed":
 		var pi stripe.PaymentIntent
