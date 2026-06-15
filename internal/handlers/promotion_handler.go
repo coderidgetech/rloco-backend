@@ -29,7 +29,7 @@ func (h *PromotionHandler) List(c *gin.Context) {
 func (h *PromotionHandler) Validate(c *gin.Context) {
 	var req struct {
 		Code     string  `json:"code" binding:"required"`
-		Subtotal float64 `json:"subtotal" binding:"required"`
+		Subtotal float64 `json:"subtotal"` // no "required": Go's validator treats 0 as missing, and 0 is a valid subtotal
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
