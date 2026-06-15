@@ -98,10 +98,25 @@ func (r *addressRepository) Update(ctx context.Context, id primitive.ObjectID, a
 		}
 	}
 
+	// $set only mutable fields. Never $set the whole struct: the bound payload
+	// carries _id (json "id"), which Mongo rejects as immutable, and would also
+	// clobber created_at/user_id with client-supplied values.
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
-		bson.M{"$set": address},
+		bson.M{"$set": bson.M{
+			"name":          address.Name,
+			"type":          address.Type,
+			"address_line":  address.AddressLine,
+			"address_line2": address.AddressLine2,
+			"city":          address.City,
+			"state":         address.State,
+			"pincode":       address.Pincode,
+			"mobile":        address.Mobile,
+			"country":       address.Country,
+			"is_default":    address.IsDefault,
+			"updated_at":    address.UpdatedAt,
+		}},
 	)
 	return err
 }
