@@ -22,8 +22,8 @@ type EmailService interface {
 	SendOrderStatusUpdate(to string, order *models.Order, status string) error
 	SendPasswordReset(to, resetToken string) error
 	SendEmailVerification(to, verificationToken string) error
-	SendReturnConfirmation(to, returnID string) error
-	SendRefundNotification(to, returnID string, amount float64) error
+	SendReturnConfirmation(to string, order *models.Order, ret *models.Return) error
+	SendRefundNotification(to string, order *models.Order, ret *models.Return) error
 	SendPaymentReceived(to string, order *models.Order, amount float64, currency string) error
 	SendNewOrderAlert(orderNumber, totalDisplay, customerEmail string) error
 	SendVendorPortalCredentials(to, vendorName, loginURL, temporaryPassword string) error
@@ -102,7 +102,7 @@ func (s *emailService) sendEmail(to, subject, body string) error {
 	return nil
 }
 
-// --- Shared R-Loko transactional layout (table-based, #B4770E, dark header) ---
+// --- Shared Rloko transactional layout (table-based, #B4770E, dark header) ---
 
 func rlokoEmailShell(htmlTitle, heroHeadline, innerRows string) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
@@ -119,14 +119,14 @@ func rlokoEmailShell(htmlTitle, heroHeadline, innerRows string) string {
       <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.08);border:1px solid #e8e4df;">
         <tr>
           <td style="background:linear-gradient(135deg,#1a1a1a 0%%,#2d2d2d 100%%);padding:28px 32px;text-align:center;">
-            <p style="margin:0;font-size:11px;letter-spacing:0.35em;text-transform:uppercase;color:#c9a227;">R-Loko</p>
+            <p style="margin:0;font-size:11px;letter-spacing:0.35em;text-transform:uppercase;color:#c9a227;">Rloko</p>
             <h1 style="margin:12px 0 0;font-size:22px;font-weight:400;color:#faf8f5;line-height:1.3;">%s</h1>
           </td>
         </tr>
 %s
         <tr>
           <td style="padding:20px 32px 28px;background:#f7f5f2;border-top:1px solid #ebe6e0;text-align:center;">
-            <p style="margin:0;font-size:12px;color:#9a948c;">© R-Loko · Luxury fashion</p>
+            <p style="margin:0;font-size:12px;color:#9a948c;">© Rloko · Luxury fashion</p>
           </td>
         </tr>
       </table>
@@ -369,8 +369,8 @@ func (s *emailService) SendOrderConfirmation(to string, order *models.Order) err
 		body += emailButtonRow(url, "View your order")
 	}
 	body += emailMutedNote("We'll email you again as soon as your order ships.")
-	return s.sendEmail(to, fmt.Sprintf("Order confirmed · %s · R-Loko", order.OrderNumber),
-		rlokoEmailShell("Order confirmed — R-Loko", "Thank you for your order", body))
+	return s.sendEmail(to, fmt.Sprintf("Order confirmed · %s · Rloko", order.OrderNumber),
+		rlokoEmailShell("Order confirmed — Rloko", "Thank you for your order", body))
 }
 
 func (s *emailService) SendShippingNotification(to string, order *models.Order) error {
@@ -386,8 +386,8 @@ func (s *emailService) SendShippingNotification(to string, order *models.Order) 
 		body += emailButtonRow(url, "Track your order")
 	}
 	body += emailMutedNote("Tracking updates may take a few hours to appear with the carrier.")
-	return s.sendEmail(to, fmt.Sprintf("Your order %s has shipped · R-Loko", order.OrderNumber),
-		rlokoEmailShell("Your order has shipped — R-Loko", "It's on the way", body))
+	return s.sendEmail(to, fmt.Sprintf("Your order %s has shipped · Rloko", order.OrderNumber),
+		rlokoEmailShell("Your order has shipped — Rloko", "It's on the way", body))
 }
 
 func (s *emailService) SendOrderStatusUpdate(to string, order *models.Order, status string) error {
@@ -413,8 +413,8 @@ func (s *emailService) SendOrderStatusUpdate(to string, order *models.Order, sta
 	if c.note != "" {
 		body += emailMutedNote(c.note)
 	}
-	return s.sendEmail(to, fmt.Sprintf("%s · order %s · R-Loko", c.title, order.OrderNumber),
-		rlokoEmailShell(c.title+" — R-Loko", c.title, body))
+	return s.sendEmail(to, fmt.Sprintf("%s · order %s · Rloko", c.title, order.OrderNumber),
+		rlokoEmailShell(c.title+" — Rloko", c.title, body))
 }
 
 func capitalizeStatus(s string) string {
@@ -432,41 +432,96 @@ func (s *emailService) SendPasswordReset(to, resetToken string) error {
 		emailP("We received a request to reset your password. Click the button below to choose a new one.") +
 		emailP("If you didn't ask for this, you can ignore this email — your password will stay the same.")
 	body := emailTextBlockRow(inner) + emailButtonRow(resetURL, "Reset password")
-	return s.sendEmail(to, "Reset your R-Loko password",
-		rlokoEmailShell("Password reset — R-Loko", "Reset your password", body))
+	return s.sendEmail(to, "Reset your Rloko password",
+		rlokoEmailShell("Password reset — Rloko", "Reset your password", body))
 }
 
 func (s *emailService) SendEmailVerification(to, verificationToken string) error {
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", s.baseURL, verificationToken)
 	inner := emailGreeting() +
-		emailP("Thanks for joining R-Loko. Confirm your email so we can keep your account secure and send order updates.") +
+		emailP("Thanks for joining Rloko. Confirm your email so we can keep your account secure and send order updates.") +
 		emailP("If you didn't create an account, you can ignore this message.")
 	body := emailTextBlockRow(inner) + emailButtonRow(verifyURL, "Verify email")
-	return s.sendEmail(to, "Verify your email · R-Loko",
-		rlokoEmailShell("Verify your email — R-Loko", "One quick step", body))
+	return s.sendEmail(to, "Verify your email · Rloko",
+		rlokoEmailShell("Verify your email — Rloko", "One quick step", body))
 }
 
-func (s *emailService) SendReturnConfirmation(to, returnID string) error {
-	rid := html.EscapeString(returnID)
-	inner := emailGreeting() +
-		emailP(fmt.Sprintf(`We've received your return request <strong style="color:#2c2825;">%s</strong>.`, rid)) +
-		emailP("Our team will review it and email you when it's approved or if we need more information.")
-	body := emailTextBlockRow(inner) +
-		emailMutedNote("Please keep your items packed as instructed until you receive return shipping instructions, if applicable.")
-	return s.sendEmail(to, "Return request received · R-Loko",
-		rlokoEmailShell("Return request — R-Loko", "We've got your return", body))
+// emailReturnItemsTable lists the items in a return, using the order's currency.
+func emailReturnItemsTable(order *models.Order, ret *models.Return) string {
+	if ret == nil || len(ret.Items) == 0 {
+		return ""
+	}
+	sym := orderCurrencySymbol(order)
+	var rows strings.Builder
+	for _, it := range ret.Items {
+		meta := fmt.Sprintf("Qty %d", it.Quantity)
+		if it.Size != "" {
+			meta = "Size " + html.EscapeString(it.Size) + " · " + meta
+		}
+		rows.WriteString(fmt.Sprintf(`
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #ebe6e0;vertical-align:top;">
+                  <div style="font-size:14px;color:#2c2825;font-weight:600;">%s</div>
+                  <div style="font-size:12px;color:#8a847c;margin-top:2px;">%s</div>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #ebe6e0;text-align:right;vertical-align:top;font-size:14px;color:#2c2825;white-space:nowrap;">%s</td>
+              </tr>`,
+			html.EscapeString(it.ProductName), meta,
+			html.EscapeString(fmtMoney(sym, it.Price*float64(it.Quantity)))))
+	}
+	return fmt.Sprintf(`        <tr>
+          <td style="padding:8px 32px 0;">
+            <table role="presentation" width="100%%" cellspacing="0" cellpadding="0">%s
+            </table>
+          </td>
+        </tr>`, rows.String())
 }
 
-func (s *emailService) SendRefundNotification(to, returnID string, amount float64) error {
-	rid := html.EscapeString(returnID)
-	amt := html.EscapeString(fmt.Sprintf("$%.2f", amount))
+func (s *emailService) SendReturnConfirmation(to string, order *models.Order, ret *models.Return) error {
+	on := html.EscapeString(order.OrderNumber)
 	inner := emailGreeting() +
-		emailP(fmt.Sprintf(`Your refund for return <strong style="color:#2c2825;">%s</strong> has been issued.`, rid)) +
-		emailP("Depending on your bank or card issuer, funds usually appear within 5–10 business days.")
+		emailP(fmt.Sprintf(`We've received your return request for order <strong style="color:#2c2825;">%s</strong>. Here's what you asked to return:`, on))
+	body := emailTextBlockRow(inner) + emailReturnItemsTable(order, ret)
+	if ret != nil && strings.TrimSpace(ret.Reason) != "" {
+		body += emailInfoBox("Reason", html.EscapeString(ret.Reason))
+	}
+	body += emailTextBlockRow(emailP("Our team will review your request and email you once it's approved — or if we need anything else from you."))
+	if url := s.orderDetailURL(order); url != "" {
+		body += emailButtonRow(url, "View your order")
+	}
+	body += emailMutedNote("Please keep the items packed until you receive return shipping instructions, if applicable.")
+	return s.sendEmail(to, fmt.Sprintf("Return request received · order %s · Rloko", order.OrderNumber),
+		rlokoEmailShell("Return request — Rloko", "We've got your return", body))
+}
+
+func (s *emailService) SendRefundNotification(to string, order *models.Order, ret *models.Return) error {
+	on := html.EscapeString(order.OrderNumber)
+	amount := 0.0
+	method := ""
+	if ret != nil {
+		amount = ret.RefundAmount
+		method = ret.RefundMethod
+	}
+	amt := html.EscapeString(fmtMoney(orderCurrencySymbol(order), amount))
+	dest := "your original payment method"
+	if strings.EqualFold(strings.TrimSpace(method), "store_credit") {
+		dest = "store credit"
+	}
+	inner := emailGreeting() +
+		emailP(fmt.Sprintf(`Good news — your refund for order <strong style="color:#2c2825;">%s</strong> has been issued to %s.`, on, dest))
 	body := emailTextBlockRow(inner) +
-		emailHighlightBox("Refund amount", fmt.Sprintf(`<span style="color:#B4770E;">%s</span>`, amt))
-	return s.sendEmail(to, "Refund processed · R-Loko",
-		rlokoEmailShell("Refund processed — R-Loko", "Your refund is on the way", body))
+		emailHighlightBox("Refund amount", fmt.Sprintf(`<span style="color:#B4770E;">%s</span>`, amt)) +
+		emailReturnItemsTable(order, ret)
+	if strings.EqualFold(strings.TrimSpace(method), "store_credit") {
+		body += emailTextBlockRow(emailP("Your store credit is available now and will apply automatically at your next checkout."))
+	} else {
+		body += emailTextBlockRow(emailP("Depending on your bank or card issuer, funds usually appear within 5–10 business days."))
+	}
+	if url := s.orderDetailURL(order); url != "" {
+		body += emailButtonRow(url, "View your order")
+	}
+	return s.sendEmail(to, fmt.Sprintf("Refund processed · order %s · Rloko", order.OrderNumber),
+		rlokoEmailShell("Refund processed — Rloko", "Your refund is on the way", body))
 }
 
 func (s *emailService) SendPaymentReceived(to string, order *models.Order, amount float64, currency string) error {
@@ -480,8 +535,8 @@ func (s *emailService) SendPaymentReceived(to string, order *models.Order, amoun
 	if url := s.orderDetailURL(order); url != "" {
 		body += emailButtonRow(url, "View your order")
 	}
-	return s.sendEmail(to, fmt.Sprintf("Payment received · order %s · R-Loko", order.OrderNumber),
-		rlokoEmailShell("Payment received — R-Loko", "Thank you", body))
+	return s.sendEmail(to, fmt.Sprintf("Payment received · order %s · Rloko", order.OrderNumber),
+		rlokoEmailShell("Payment received — Rloko", "Thank you", body))
 }
 
 func (s *emailService) SendNewOrderAlert(orderNumber, totalDisplay, customerEmail string) error {
@@ -497,8 +552,8 @@ func (s *emailService) SendNewOrderAlert(orderNumber, totalDisplay, customerEmai
 		emailP(fmt.Sprintf(`Customer: %s`, ce)) +
 		emailP("Open the admin dashboard to review and fulfill this order.")
 	body := emailTextBlockRow(emailGreeting()+inner) + emailButtonRow(dashURL, "View orders in admin")
-	return s.sendEmail(s.adminEmail, fmt.Sprintf("[R-Loko] New order %s", orderNumber),
-		rlokoEmailShell("New order — admin · R-Loko", "New order to fulfill", body))
+	return s.sendEmail(s.adminEmail, fmt.Sprintf("[Rloko] New order %s", orderNumber),
+		rlokoEmailShell("New order — admin · Rloko", "New order to fulfill", body))
 }
 
 func (s *emailService) SendVendorPortalCredentials(to, vendorName, loginURL, temporaryPassword string) error {
@@ -524,9 +579,9 @@ func (s *emailService) SendVendorPortalCredentials(to, vendorName, loginURL, tem
 	body := emailTextBlockRow(inner) +
 		emailButtonRow(loginURL, "Open vendor portal") +
 		pwRow +
-		emailMutedNote("Never share this email. R-Loko staff will never ask for your password by phone or message.")
-	return s.sendEmail(to, "Your R-Loko vendor portal is ready",
-		rlokoEmailShell("Vendor portal — R-Loko", "Your vendor portal is ready", body))
+		emailMutedNote("Never share this email. Rloko staff will never ask for your password by phone or message.")
+	return s.sendEmail(to, "Your Rloko vendor portal is ready",
+		rlokoEmailShell("Vendor portal — Rloko", "Your vendor portal is ready", body))
 }
 
 func (s *emailService) SendVendorApplicationReceived(to, businessName string) error {
@@ -535,9 +590,9 @@ func (s *emailService) SendVendorApplicationReceived(to, businessName string) er
 	}
 	bn := html.EscapeString(businessName)
 	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Hi %s,</p>
-<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Thank you for applying to sell on R-Loko. We've received your application and our team will review it shortly.</p>
+<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Thank you for applying to sell on Rloko. We've received your application and our team will review it shortly.</p>
 <p style="margin:0;font-size:15px;line-height:1.65;color:#5c5650;">We'll send you another email once a decision has been made — usually within 2–3 business days.</p>`, bn)
-	return s.sendEmail(to, "We received your vendor application — R-Loko",
+	return s.sendEmail(to, "We received your vendor application — Rloko",
 		rlokoEmailShell("Vendor Application", "Application received", emailTextBlockRow(body)))
 }
 
@@ -555,8 +610,8 @@ func (s *emailService) SendVendorApplicationApproved(to, businessName, loginURL,
 		credBlock = `<p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#5c5650;">Sign in using your existing account credentials.</p>`
 	}
 	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Congratulations! Your application for <strong>%s</strong> has been <strong style="color:#2c7a4b;">approved</strong>.</p>%s`, bn, credBlock)
-	return s.sendEmail(to, "Your R-Loko vendor application was approved 🎉",
-		rlokoEmailShell("Vendor Approved", "Welcome to R-Loko",
+	return s.sendEmail(to, "Your Rloko vendor application was approved 🎉",
+		rlokoEmailShell("Vendor Approved", "Welcome to Rloko",
 			emailTextBlockRow(body)+emailButtonRow(loginURL, "Open vendor portal")))
 }
 
@@ -569,10 +624,10 @@ func (s *emailService) SendVendorApplicationRejected(to, businessName, reason st
 	if reason != "" {
 		reasonRow = fmt.Sprintf(`<p style="margin:16px 0 0;font-size:15px;line-height:1.65;color:#5c5650;"><strong>Reason:</strong> %s</p>`, html.EscapeString(reason))
 	}
-	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Thank you for your interest in selling on R-Loko.</p>
+	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#5c5650;">Thank you for your interest in selling on Rloko.</p>
 <p style="margin:0;font-size:15px;line-height:1.65;color:#5c5650;">After reviewing your application for <strong>%s</strong>, we're unable to approve it at this time.%s</p>
 <p style="margin:16px 0 0;font-size:15px;line-height:1.65;color:#5c5650;">You're welcome to apply again in the future if your circumstances change.</p>`, bn, reasonRow)
-	return s.sendEmail(to, "Update on your R-Loko vendor application",
+	return s.sendEmail(to, "Update on your Rloko vendor application",
 		rlokoEmailShell("Vendor Application", "Application update", emailTextBlockRow(body)))
 }
 
@@ -597,6 +652,6 @@ func (s *emailService) SendContactInquiry(name, fromEmail, phone, subject, messa
 <p style="margin:0 0 12px;font-size:15px;line-height:1.65;color:#2c2825;"><strong>Subject:</strong> %s</p>
 <p style="margin:0;font-size:15px;line-height:1.65;color:#2c2825;"><strong>Message:</strong></p>
 <p style="margin:12px 0 0;font-size:15px;line-height:1.65;color:#2c2825;white-space:pre-wrap;">%s</p>`, n, fe, ph, sub, msg)
-	return s.sendEmail(to, fmt.Sprintf("[R-Loko Contact] %s", subject),
+	return s.sendEmail(to, fmt.Sprintf("[Rloko Contact] %s", subject),
 		rlokoEmailShell("Website contact form", "New inquiry", emailTextBlockRow(body)))
 }

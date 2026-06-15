@@ -35,7 +35,7 @@ func renderConfirmation(order *models.Order) string {
 	body := emailTextBlockRow(inner) + emailItemsTable(order) + emailTotalsTable(order) +
 		emailAddressBlock(order.ShippingInfo) + emailButtonRow("https://dev.rloko.com/orders/x", "View your order") +
 		emailMutedNote("We'll email you again as soon as your order ships.")
-	return rlokoEmailShell("Order confirmed — R-Loko", "Thank you for your order", body)
+	return rlokoEmailShell("Order confirmed — Rloko", "Thank you for your order", body)
 }
 
 func renderStatus(order *models.Order, status string) string {
@@ -49,11 +49,51 @@ func renderStatus(order *models.Order, status string) string {
 	if c.note != "" {
 		body += emailMutedNote(c.note)
 	}
-	return rlokoEmailShell(c.title+" — R-Loko", c.title, body)
+	return rlokoEmailShell(c.title+" — Rloko", c.title, body)
+}
+
+func sampleReturn(order *models.Order) *models.Return {
+	return &models.Return{
+		OrderNumber:  order.OrderNumber,
+		Reason:       "Wrong size",
+		RefundMethod: "original",
+		RefundAmount: 4999,
+		Items:        []models.ReturnItem{{ProductName: "Silk Wrap Dress", Size: "M", Quantity: 1, Price: 4999}},
+	}
+}
+
+func renderReturn(order *models.Order, ret *models.Return) string {
+	on := html.EscapeString(order.OrderNumber)
+	body := emailTextBlockRow(emailGreeting()+emailP("We've received your return request for order <strong>"+on+"</strong>:")) +
+		emailReturnItemsTable(order, ret) + emailInfoBox("Reason", html.EscapeString(ret.Reason)) +
+		emailButtonRow("https://dev.rloko.com/orders/x", "View your order")
+	return rlokoEmailShell("Return request — Rloko", "We've got your return", body)
+}
+
+func renderRefund(order *models.Order, ret *models.Return) string {
+	body := emailTextBlockRow(emailGreeting()+emailP("Your refund has been issued.")) +
+		emailHighlightBox("Refund amount", html.EscapeString(fmtMoney(orderCurrencySymbol(order), ret.RefundAmount))) +
+		emailReturnItemsTable(order, ret) + emailButtonRow("https://dev.rloko.com/orders/x", "View your order")
+	return rlokoEmailShell("Refund processed — Rloko", "Your refund is on the way", body)
 }
 
 func TestEmailTemplatesRender(t *testing.T) {
 	order := sampleOrder()
+	ret := sampleReturn(order)
+
+	retDoc := renderReturn(order, ret)
+	for _, want := range []string{"Silk Wrap Dress", "Wrong size", "₹", "View your order"} {
+		if !strings.Contains(retDoc, want) {
+			t.Errorf("return email missing %q", want)
+		}
+	}
+	_ = os.WriteFile("/tmp/rloko-email-return.html", []byte(retDoc), 0o644)
+
+	refDoc := renderRefund(order, ret)
+	if !strings.Contains(refDoc, "₹4999") {
+		t.Errorf("refund email missing currency-correct amount")
+	}
+	_ = os.WriteFile("/tmp/rloko-email-refund.html", []byte(refDoc), 0o644)
 
 	conf := renderConfirmation(order)
 	// Content assertions — proves the email is informative, not generic.

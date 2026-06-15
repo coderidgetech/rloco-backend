@@ -120,7 +120,7 @@ func (s *returnService) Create(ctx context.Context, orderID, userID primitive.Ob
 
 	// Send return confirmation email (async)
 	go func() {
-		_ = s.emailService.SendReturnConfirmation(order.ShippingInfo.Email, returnReq.ID.Hex())
+		_ = s.emailService.SendReturnConfirmation(order.ShippingInfo.Email, order, returnReq)
 	}()
 
 	return returnReq, nil
@@ -246,7 +246,7 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 		if ret != nil {
 			ord, _ := s.orderRepo.GetByID(context.Background(), ret.OrderID)
 			if ord != nil {
-				_ = s.emailService.SendRefundNotification(ord.ShippingInfo.Email, ret.ID.Hex(), ret.RefundAmount)
+				_ = s.emailService.SendRefundNotification(ord.ShippingInfo.Email, ord, ret)
 			}
 		}
 	}()
