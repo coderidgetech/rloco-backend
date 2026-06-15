@@ -28,7 +28,7 @@ func (h *TaxHandler) Calculate(c *gin.Context) {
 		State        *string  `json:"state,omitempty"`
 		City         *string  `json:"city,omitempty"`
 		PostalCode   *string  `json:"postal_code,omitempty"`
-		Subtotal     float64  `json:"subtotal" binding:"required"`
+		Subtotal     float64  `json:"subtotal"` // no "required": Go's validator treats 0 as missing, and 0 is a valid subtotal
 		ShippingUSD  *float64 `json:"shipping_usd,omitempty"`
 		AddressLine1 *string  `json:"address_line1,omitempty"`
 	}

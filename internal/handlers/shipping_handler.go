@@ -28,7 +28,7 @@ func (h *ShippingHandler) Calculate(c *gin.Context) {
 		LastName   string   `json:"last_name,omitempty"`
 		Email      string   `json:"email,omitempty"`
 		Phone      string   `json:"phone,omitempty"`
-		Subtotal   float64  `json:"subtotal" binding:"required"`
+		Subtotal   float64  `json:"subtotal"` // no "required": Go's validator treats 0 as missing, and 0 is a valid subtotal
 		Weight     *float64 `json:"weight,omitempty"`
 	}
 
