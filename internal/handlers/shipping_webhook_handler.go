@@ -202,7 +202,7 @@ func (h *ShippingWebhookHandler) processTrackingEvent(
 	// Notify the customer for meaningful milestones
 	switch normalised {
 	case "TRANSIT", "IN TRANSIT", "IN_TRANSIT", "DELIVERED", "DELIVERY EXCEPTION", "FAILED":
-		_ = h.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order.OrderNumber, status)
+		_ = h.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order, status)
 	}
 
 	// Advance order status from carrier signals. UpdateStatus enforces legal

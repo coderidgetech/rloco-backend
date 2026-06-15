@@ -11,18 +11,20 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+
+	"rloco-backend/internal/models"
 )
 
 type EmailService interface {
 	Configured() bool
-	SendOrderConfirmation(to, orderNumber string, orderData map[string]interface{}) error
-	SendShippingNotification(to, orderNumber, trackingNumber string) error
-	SendOrderStatusUpdate(to, orderNumber, status string) error
+	SendOrderConfirmation(to string, order *models.Order) error
+	SendShippingNotification(to string, order *models.Order) error
+	SendOrderStatusUpdate(to string, order *models.Order, status string) error
 	SendPasswordReset(to, resetToken string) error
 	SendEmailVerification(to, verificationToken string) error
 	SendReturnConfirmation(to, returnID string) error
 	SendRefundNotification(to, returnID string, amount float64) error
-	SendPaymentReceived(to, orderNumber string, amount float64, currency string) error
+	SendPaymentReceived(to string, order *models.Order, amount float64, currency string) error
 	SendNewOrderAlert(orderNumber, totalDisplay, customerEmail string) error
 	SendVendorPortalCredentials(to, vendorName, loginURL, temporaryPassword string) error
 	SendContactInquiry(name, fromEmail, phone, subject, message string) error
@@ -184,52 +186,235 @@ func emailMutedNote(text string) string {
         </tr>`, html.EscapeString(text))
 }
 
-func (s *emailService) SendOrderConfirmation(to, orderNumber string, orderData map[string]interface{}) error {
-	total := orderData["total"]
-	totalStr := ""
-	switch v := total.(type) {
-	case float64:
-		totalStr = fmt.Sprintf("$%.2f", v)
-	case float32:
-		totalStr = fmt.Sprintf("$%.2f", v)
-	default:
-		totalStr = fmt.Sprintf("%v", total)
-	}
-	on := html.EscapeString(orderNumber)
-	inner := emailGreeting() +
-		emailP(fmt.Sprintf(`Your order <strong style="color:#2c2825;">%s</strong> has been confirmed.`, on)) +
-		emailP("We'll send you another email when your order ships.")
-	body := emailTextBlockRow(inner) +
-		emailHighlightBox("Order total", fmt.Sprintf(`<span style="color:#B4770E;">%s</span>`, html.EscapeString(totalStr)))
+// --- Order-aware content helpers -------------------------------------------
 
-	htmlDoc := rlokoEmailShell("Order confirmed — R-Loko", "Thank you for your order", body)
-	return s.sendEmail(to, fmt.Sprintf("Order confirmed · %s · R-Loko", orderNumber), htmlDoc)
+func orderCurrencySymbol(order *models.Order) string {
+	if CountryLooksIndia(order.ShippingInfo.Country) {
+		return "₹"
+	}
+	return "$"
 }
 
-func (s *emailService) SendShippingNotification(to, orderNumber, trackingNumber string) error {
-	on := html.EscapeString(orderNumber)
-	tn := html.EscapeString(trackingNumber)
-	inner := emailGreeting() +
-		emailP(fmt.Sprintf(`Your order <strong style="color:#2c2825;">%s</strong> is on its way.`, on)) +
-		emailP("Use your tracking number below to follow the shipment.")
-	body := emailTextBlockRow(inner) +
-		emailHighlightBox("Tracking number", fmt.Sprintf(`<span style="font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;font-size:16px;">%s</span>`, tn)) +
-		emailMutedNote("Tracking updates may take a few hours to appear with the carrier.")
+func fmtMoney(symbol string, amount float64) string {
+	return fmt.Sprintf("%s%.2f", symbol, amount)
+}
 
-	return s.sendEmail(to, fmt.Sprintf("Your order %s has shipped · R-Loko", orderNumber),
+// formatMoneyCurrency formats by ISO currency code (used where the charged amount
+// and currency are known explicitly, e.g. payment received).
+func formatMoneyCurrency(amount float64, currency string) string {
+	switch strings.ToUpper(strings.TrimSpace(currency)) {
+	case "USD":
+		return fmt.Sprintf("$%.2f", amount)
+	case "INR":
+		return fmt.Sprintf("₹%.2f", amount)
+	default:
+		return fmt.Sprintf("%.2f %s", amount, strings.ToUpper(currency))
+	}
+}
+
+func (s *emailService) orderDetailURL(order *models.Order) string {
+	if s.baseURL == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/orders/%s", s.baseURL, order.ID.Hex())
+}
+
+// emailItemsTable renders the order line items (name, size · qty, line total).
+func emailItemsTable(order *models.Order) string {
+	if len(order.Items) == 0 {
+		return ""
+	}
+	sym := orderCurrencySymbol(order)
+	var rows strings.Builder
+	for _, it := range order.Items {
+		meta := fmt.Sprintf("Qty %d", it.Quantity)
+		if it.Size != "" {
+			meta = "Size " + html.EscapeString(it.Size) + " · " + meta
+		}
+		gift := ""
+		if it.IsGift {
+			gift = `<div style="margin-top:4px;font-size:11px;color:#B4770E;">Gift wrapped</div>`
+		}
+		rows.WriteString(fmt.Sprintf(`
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #ebe6e0;vertical-align:top;">
+                  <div style="font-size:14px;color:#2c2825;font-weight:600;">%s</div>
+                  <div style="font-size:12px;color:#8a847c;margin-top:2px;">%s</div>%s
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #ebe6e0;text-align:right;vertical-align:top;font-size:14px;color:#2c2825;white-space:nowrap;">%s</td>
+              </tr>`,
+			html.EscapeString(it.ProductName), meta, gift,
+			html.EscapeString(fmtMoney(sym, it.Price*float64(it.Quantity)))))
+	}
+	return fmt.Sprintf(`        <tr>
+          <td style="padding:8px 32px 0;">
+            <table role="presentation" width="100%%" cellspacing="0" cellpadding="0">%s
+            </table>
+          </td>
+        </tr>`, rows.String())
+}
+
+// emailTotalsTable renders the price breakdown.
+func emailTotalsTable(order *models.Order) string {
+	sym := orderCurrencySymbol(order)
+	line := func(label, val string, strong bool) string {
+		color, weight, size := "#5c5650", "400", "13px"
+		if strong {
+			color, weight, size = "#2c2825", "700", "16px"
+		}
+		return fmt.Sprintf(`<tr><td style="padding:4px 0;font-size:%s;color:%s;font-weight:%s;">%s</td><td style="padding:4px 0;text-align:right;font-size:%s;color:%s;font-weight:%s;white-space:nowrap;">%s</td></tr>`,
+			size, color, weight, html.EscapeString(label), size, color, weight, html.EscapeString(val))
+	}
+	var b strings.Builder
+	b.WriteString(line("Subtotal", fmtMoney(sym, order.Subtotal), false))
+	if order.Discount > 0 {
+		b.WriteString(line("Discount", "-"+fmtMoney(sym, order.Discount), false))
+	}
+	shipping := "Free"
+	if order.ShippingCost > 0 {
+		shipping = fmtMoney(sym, order.ShippingCost)
+	}
+	b.WriteString(line("Shipping", shipping, false))
+	if order.GiftPackingCharge > 0 {
+		b.WriteString(line("Gift packing", fmtMoney(sym, order.GiftPackingCharge), false))
+	}
+	if order.Tax > 0 {
+		b.WriteString(line("Tax", fmtMoney(sym, order.Tax), false))
+	}
+	b.WriteString(`<tr><td colspan="2" style="padding:6px 0 0;border-top:1px solid #ebe6e0;"></td></tr>`)
+	b.WriteString(line("Total", fmtMoney(sym, order.Total), true))
+	return fmt.Sprintf(`        <tr>
+          <td style="padding:10px 32px 24px;">
+            <table role="presentation" width="100%%" cellspacing="0" cellpadding="0">%s
+            </table>
+          </td>
+        </tr>`, b.String())
+}
+
+// emailInfoBox is a lighter highlight box for multi-line info (e.g. an address).
+func emailInfoBox(label, valueHTML string) string {
+	return fmt.Sprintf(`        <tr>
+          <td style="padding:0 32px 24px;">
+            <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#faf8f6;border-radius:10px;border:1px solid #ebe6e0;">
+              <tr><td style="padding:16px 20px;">
+                <p style="margin:0 0 6px;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#8a847c;">%s</p>
+                <div style="font-size:14px;color:#2c2825;line-height:1.55;">%s</div>
+              </td></tr>
+            </table>
+          </td>
+        </tr>`, html.EscapeString(label), valueHTML)
+}
+
+func emailAddressBlock(si models.ShippingInfo) string {
+	parts := []string{}
+	if n := strings.TrimSpace(si.FirstName + " " + si.LastName); n != "" {
+		parts = append(parts, html.EscapeString(n))
+	}
+	if si.Address != "" {
+		parts = append(parts, html.EscapeString(si.Address))
+	}
+	if cs := strings.Trim(strings.TrimSpace(si.City+", "+si.State+" "+si.ZipCode), ", "); cs != "" {
+		parts = append(parts, html.EscapeString(cs))
+	}
+	if si.Country != "" {
+		parts = append(parts, html.EscapeString(si.Country))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return emailInfoBox("Shipping to", strings.Join(parts, "<br>"))
+}
+
+// statusEmailCopy is the per-status content used by SendOrderStatusUpdate.
+type statusEmailCopy struct {
+	title        string // hero headline + subject stem
+	intro        string // plain text (escaped at render)
+	showTracking bool
+	showReview   bool
+	note         string // optional muted footnote (plain text)
+}
+
+func statusEmailCopyFor(status string) statusEmailCopy {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "DELIVERED":
+		return statusEmailCopy{title: "Delivered", intro: "Your order has been delivered — we hope you love it.", showReview: true, note: "Not quite right? You can start a return from your orders page within the return window."}
+	case "OUT FOR DELIVERY", "OUT_FOR_DELIVERY":
+		return statusEmailCopy{title: "Out for delivery", intro: "Good news — your order is out for delivery and should arrive today.", showTracking: true}
+	case "TRANSIT", "IN TRANSIT", "IN_TRANSIT", "SHIPPED":
+		return statusEmailCopy{title: "On its way", intro: "Your order is in transit. Follow its journey with the tracking details below.", showTracking: true}
+	case "DELIVERY EXCEPTION", "EXCEPTION", "FAILED", "FAILURE":
+		return statusEmailCopy{title: "Delivery update", intro: "There's a temporary issue delivering your order. The carrier is working on it and we're keeping an eye on it too.", showTracking: true, note: "If it isn't resolved within a couple of days, just reply to this email and our team will help."}
+	case "RETURNED", "RETURN":
+		return statusEmailCopy{title: "Order returned", intro: "Your order has been marked as returned. If a refund is due, it will follow once the return is processed."}
+	case "CANCELLED", "CANCELED":
+		return statusEmailCopy{title: "Order cancelled", intro: "Your order has been cancelled. If you were charged, a refund has been issued and usually appears within 5–10 business days."}
+	case "PROCESSING":
+		return statusEmailCopy{title: "Order confirmed", intro: "Your payment is confirmed and your order is being prepared. We'll email you again as soon as it ships."}
+	default:
+		return statusEmailCopy{title: "Order update", intro: "Your order status is now " + capitalizeStatus(status) + "."}
+	}
+}
+
+// --- Order lifecycle emails -------------------------------------------------
+
+func (s *emailService) SendOrderConfirmation(to string, order *models.Order) error {
+	on := html.EscapeString(order.OrderNumber)
+	inner := emailGreeting() +
+		emailP(fmt.Sprintf(`Thanks for your order — <strong style="color:#2c2825;">%s</strong> is confirmed. Here's a summary:`, on))
+	body := emailTextBlockRow(inner) +
+		emailItemsTable(order) +
+		emailTotalsTable(order) +
+		emailAddressBlock(order.ShippingInfo)
+	if url := s.orderDetailURL(order); url != "" {
+		body += emailButtonRow(url, "View your order")
+	}
+	body += emailMutedNote("We'll email you again as soon as your order ships.")
+	return s.sendEmail(to, fmt.Sprintf("Order confirmed · %s · R-Loko", order.OrderNumber),
+		rlokoEmailShell("Order confirmed — R-Loko", "Thank you for your order", body))
+}
+
+func (s *emailService) SendShippingNotification(to string, order *models.Order) error {
+	on := html.EscapeString(order.OrderNumber)
+	inner := emailGreeting() +
+		emailP(fmt.Sprintf(`Your order <strong style="color:#2c2825;">%s</strong> is on its way.`, on))
+	body := emailTextBlockRow(inner)
+	if order.TrackingNumber != nil && strings.TrimSpace(*order.TrackingNumber) != "" {
+		body += emailHighlightBox("Tracking number", fmt.Sprintf(`<span style="font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;font-size:16px;">%s</span>`, html.EscapeString(*order.TrackingNumber)))
+	}
+	body += emailItemsTable(order)
+	if url := s.orderDetailURL(order); url != "" {
+		body += emailButtonRow(url, "Track your order")
+	}
+	body += emailMutedNote("Tracking updates may take a few hours to appear with the carrier.")
+	return s.sendEmail(to, fmt.Sprintf("Your order %s has shipped · R-Loko", order.OrderNumber),
 		rlokoEmailShell("Your order has shipped — R-Loko", "It's on the way", body))
 }
 
-func (s *emailService) SendOrderStatusUpdate(to, orderNumber, status string) error {
-	st := capitalizeStatus(status)
-	on := html.EscapeString(orderNumber)
-	stEsc := html.EscapeString(st)
+func (s *emailService) SendOrderStatusUpdate(to string, order *models.Order, status string) error {
+	c := statusEmailCopyFor(status)
+	on := html.EscapeString(order.OrderNumber)
 	inner := emailGreeting() +
-		emailP(fmt.Sprintf(`Your order <strong style="color:#2c2825;">%s</strong> has been updated.`, on)) +
-		emailP(fmt.Sprintf(`Current status: <strong style="color:#B4770E;">%s</strong>`, stEsc))
+		emailP(fmt.Sprintf(`An update on your order <strong style="color:#2c2825;">%s</strong>:`, on)) +
+		emailP(html.EscapeString(c.intro))
 	body := emailTextBlockRow(inner)
-	return s.sendEmail(to, fmt.Sprintf("Order %s update · R-Loko", orderNumber),
-		rlokoEmailShell("Order status update — R-Loko", "Your order was updated", body))
+	if c.showTracking && order.TrackingNumber != nil && strings.TrimSpace(*order.TrackingNumber) != "" {
+		body += emailHighlightBox("Tracking number", fmt.Sprintf(`<span style="font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;font-size:16px;">%s</span>`, html.EscapeString(*order.TrackingNumber)))
+	}
+	if url := s.orderDetailURL(order); url != "" {
+		label := "View your order"
+		switch {
+		case c.showReview:
+			label = "View order & leave a review"
+		case c.showTracking:
+			label = "Track your order"
+		}
+		body += emailButtonRow(url, label)
+	}
+	if c.note != "" {
+		body += emailMutedNote(c.note)
+	}
+	return s.sendEmail(to, fmt.Sprintf("%s · order %s · R-Loko", c.title, order.OrderNumber),
+		rlokoEmailShell(c.title+" — R-Loko", c.title, body))
 }
 
 func capitalizeStatus(s string) string {
@@ -284,26 +469,18 @@ func (s *emailService) SendRefundNotification(to, returnID string, amount float6
 		rlokoEmailShell("Refund processed — R-Loko", "Your refund is on the way", body))
 }
 
-func (s *emailService) SendPaymentReceived(to, orderNumber string, amount float64, currency string) error {
-	currency = strings.ToUpper(currency)
-	amountStr := fmt.Sprintf("%.2f", amount)
-	if currency == "USD" || currency == "INR" {
-		if currency == "INR" {
-			amountStr = "₹" + amountStr
-		} else {
-			amountStr = "$" + amountStr
-		}
-	} else {
-		amountStr = amountStr + " " + currency
-	}
-	on := html.EscapeString(orderNumber)
-	amtEsc := html.EscapeString(amountStr)
+func (s *emailService) SendPaymentReceived(to string, order *models.Order, amount float64, currency string) error {
+	on := html.EscapeString(order.OrderNumber)
+	amtEsc := html.EscapeString(formatMoneyCurrency(amount, currency))
 	inner := emailGreeting() +
-		emailP(fmt.Sprintf(`We've received your payment for order <strong style="color:#2c2825;">%s</strong>.`, on)) +
-		emailP("Your order is being prepared. You'll get another email when it ships.")
+		emailP(fmt.Sprintf(`We've received your payment for order <strong style="color:#2c2825;">%s</strong>. Your order is being prepared, and we'll email you again when it ships.`, on))
 	body := emailTextBlockRow(inner) +
-		emailHighlightBox("Amount received", fmt.Sprintf(`<span style="color:#B4770E;">%s</span>`, amtEsc))
-	return s.sendEmail(to, fmt.Sprintf("Payment received · order %s · R-Loko", orderNumber),
+		emailHighlightBox("Amount received", fmt.Sprintf(`<span style="color:#B4770E;">%s</span>`, amtEsc)) +
+		emailItemsTable(order)
+	if url := s.orderDetailURL(order); url != "" {
+		body += emailButtonRow(url, "View your order")
+	}
+	return s.sendEmail(to, fmt.Sprintf("Payment received · order %s · R-Loko", order.OrderNumber),
 		rlokoEmailShell("Payment received — R-Loko", "Thank you", body))
 }
 

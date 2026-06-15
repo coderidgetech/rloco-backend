@@ -306,10 +306,7 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 
 	// Send order confirmation notifications (async)
 	go func() {
-		orderData := map[string]interface{}{
-			"total": order.Total,
-		}
-		_ = s.emailService.SendOrderConfirmation(order.ShippingInfo.Email, order.OrderNumber, orderData)
+		_ = s.emailService.SendOrderConfirmation(order.ShippingInfo.Email, order)
 		totalDisplay := fmt.Sprintf("$%.2f", order.Total)
 		_ = s.emailService.SendNewOrderAlert(order.OrderNumber, totalDisplay, order.ShippingInfo.Email)
 		if s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
@@ -507,12 +504,12 @@ func (s *orderService) UpdateStatus(ctx context.Context, id primitive.ObjectID, 
 	// Send notifications for status changes (async)
 	go func() {
 		if status == "shipped" && order.TrackingNumber != nil {
-			_ = s.emailService.SendShippingNotification(order.ShippingInfo.Email, order.OrderNumber, *order.TrackingNumber)
+			_ = s.emailService.SendShippingNotification(order.ShippingInfo.Email, order)
 			if s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
 				_ = s.smsService.SendShippingNotification(context.Background(), order.ShippingInfo.Phone, order.OrderNumber, *order.TrackingNumber)
 			}
 		} else if status != oldStatus {
-			_ = s.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order.OrderNumber, status)
+			_ = s.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order, status)
 			if status == "delivered" && s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
 				_ = s.smsService.SendOrderDelivered(context.Background(), order.ShippingInfo.Phone, order.OrderNumber)
 			}
@@ -656,7 +653,7 @@ func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID
 
 	// Send email notification
 	go func() {
-		_ = s.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order.OrderNumber, "cancelled")
+		_ = s.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order, "cancelled")
 	}()
 
 	return nil
