@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
 	"strconv"
 	"strings"
@@ -52,33 +53,7 @@ func (h *OrderHandler) regionAvailability(ctx context.Context, country string) (
 	if market == "" {
 		return true, ""
 	}
-
-	cfg := getDefaultConfig()
-	if h.configService != nil {
-		if stored, err := h.configService.Get(ctx); err == nil && stored != nil && len(stored.Config) > 0 {
-			// ensureRegionDefaults backfills regions for configs predating gating.
-			cfg = ensureRegionDefaults(stored.Config)
-		}
-	}
-
-	general, ok := cfg["general"].(map[string]interface{})
-	if !ok {
-		return true, ""
-	}
-	regions, ok := general["regions"].(map[string]interface{})
-	if !ok {
-		return true, ""
-	}
-	region, ok := regions[market].(map[string]interface{})
-	if !ok {
-		return true, ""
-	}
-	en, ok := region["enabled"].(bool)
-	if !ok {
-		return true, ""
-	}
-	msg, _ := region["comingSoonMessage"].(string)
-	return en, msg
+	return regionStatusFromConfig(ctx, h.configService, market)
 }
 
 // getVendorProductIDs gets all product IDs for a vendor
@@ -452,8 +427,55 @@ func (h *OrderHandler) CreateGuest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Guests have no user id, so idempotency is scoped per-guest by email (not a
+	// shared namespace) — two different guests reusing the same Idempotency-Key
+	// must not collide and leak each other's orders. A double-submit by the same
+	// guest still can't create two orders / double-decrement stock.
+	guestNS := guestIdempotencyNamespace(req.GuestEmail)
+	idemKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(idemKey) > 256 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Idempotency-Key header must be at most 256 characters"})
+		return
+	}
+	releaseIdem := func() {
+		if h.idempotency != nil && idemKey != "" {
+			_ = h.idempotency.Release(c.Request.Context(), guestNS, idemKey)
+		}
+	}
+	if h.idempotency != nil && idemKey != "" {
+		if oid, _ := h.idempotency.LookupOrderID(c.Request.Context(), guestNS, idemKey); oid != nil {
+			order, err := h.orderService.GetByID(c.Request.Context(), *oid)
+			if err == nil {
+				c.JSON(http.StatusOK, order)
+				return
+			}
+		}
+		leased, err := h.idempotency.TryReserve(c.Request.Context(), guestNS, idemKey)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not start checkout"})
+			return
+		}
+		if !leased {
+			for i := 0; i < 50; i++ {
+				if oid, _ := h.idempotency.LookupOrderID(c.Request.Context(), guestNS, idemKey); oid != nil {
+					order, err := h.orderService.GetByID(c.Request.Context(), *oid)
+					if err == nil {
+						c.JSON(http.StatusOK, order)
+						return
+					}
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			c.JSON(http.StatusConflict, gin.H{"error": "Duplicate checkout in progress; try again shortly"})
+			return
+		}
+	}
+
 	// Region gating: refuse orders shipping to a region that isn't open yet.
 	if enabled, msg := h.regionAvailability(c.Request.Context(), req.ShippingInfo.Country); !enabled {
+		releaseIdem()
 		if msg == "" {
 			msg = "Orders are not available in this region yet."
 		}
@@ -462,10 +484,25 @@ func (h *OrderHandler) CreateGuest(c *gin.Context) {
 	}
 	order, err := h.orderService.CreateGuestOrder(c.Request.Context(), req.GuestEmail, req.GuestName, req.Items, req.ShippingInfo, "cod", req.PromotionCode, req.ShippingCarrier, req.ShippingService)
 	if err != nil {
+		releaseIdem()
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if h.idempotency != nil && idemKey != "" {
+		_ = h.idempotency.Commit(c.Request.Context(), guestNS, idemKey, order.ID)
+	}
 	c.JSON(http.StatusCreated, order)
+}
+
+// guestIdempotencyNamespace derives a stable pseudo-ObjectID from the guest email
+// so idempotency keys are isolated per guest (guests share no user id). Without
+// this, two guests reusing the same client key would collide and could be shown
+// each other's order (PII leak).
+func guestIdempotencyNamespace(email string) primitive.ObjectID {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	var ns primitive.ObjectID
+	copy(ns[:], sum[:12])
+	return ns
 }
 
 func (h *OrderHandler) Track(c *gin.Context) {

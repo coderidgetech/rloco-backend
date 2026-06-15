@@ -80,6 +80,12 @@ type Config struct {
 	OrderIndiaDefaultGSTPercent float64
 	// StripeProductTaxCode optional Stripe Tax Code id (txcd_...) for US merchandise line items; empty uses Dashboard default.
 	StripeProductTaxCode string
+	// OrderAbandonedTTLMinutes: a pending, unpaid, non-COD order older than this is
+	// auto-cancelled and its reserved stock released. Must exceed a realistic
+	// checkout+payment window. 0 disables the sweeper.
+	OrderAbandonedTTLMinutes int
+	// OrderSweepIntervalMinutes: how often the abandoned-order sweeper runs.
+	OrderSweepIntervalMinutes int
 }
 
 // ValidateTwilioVerify returns an error if Twilio Verify env is incomplete (registration OTP will not work).
@@ -192,7 +198,18 @@ func Load() (*Config, error) {
 		OrderINRPerUSD:               float64Env("ORDER_INR_PER_USD", 75),
 		OrderIndiaDefaultGSTPercent:  float64Env("ORDER_INDIA_DEFAULT_GST_PERCENT", 18),
 		StripeProductTaxCode:         strings.TrimSpace(getEnv("STRIPE_TAX_PRODUCT_CODE", "")),
+		OrderAbandonedTTLMinutes:     intEnv("ORDER_ABANDONED_TTL_MINUTES", 30),
+		OrderSweepIntervalMinutes:    intEnv("ORDER_SWEEP_INTERVAL_MINUTES", 5),
 	}, nil
+}
+
+func intEnv(key string, defaultValue int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return defaultValue
 }
 
 func getEnv(key, defaultValue string) string {

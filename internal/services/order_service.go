@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"strings"
 	"time"
@@ -26,6 +27,9 @@ type OrderService interface {
 	// tracking number on the order, then transitions it to "shipped".
 	FulfillOrder(ctx context.Context, id primitive.ObjectID) (*models.Order, error)
 	Cancel(ctx context.Context, id primitive.ObjectID, userID primitive.ObjectID, reason string) error
+	// SweepAbandonedOrders cancels pending, unpaid, non-COD orders older than
+	// olderThan and releases their reserved stock. Returns the number released.
+	SweepAbandonedOrders(ctx context.Context, olderThan time.Duration) (int, error)
 	GetTrackingUpdates(ctx context.Context, orderID primitive.ObjectID) ([]*models.OrderTrackingUpdate, error)
 	AddTrackingUpdate(ctx context.Context, orderID primitive.ObjectID, status, location, description string, trackingNumber *string) error
 	List(ctx context.Context, filter map[string]interface{}, limit, skip int) ([]*models.Order, int64, error)
@@ -84,6 +88,9 @@ func NewOrderService(orderRepo repositories.OrderRepository, trackingRepo reposi
 }
 
 func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, items []models.OrderItem, shippingInfo models.ShippingInfo, paymentInfo models.PaymentInfo, paymentMethod string, promotionCode *string, giftPackingCharge float64, selectedCarrier, selectedService string) (*models.Order, error) {
+	// Normalize payment_method at the single write point so all downstream exact-match
+	// comparisons (COD checks, sweeper filter) are reliable.
+	paymentMethod = strings.ToLower(strings.TrimSpace(paymentMethod))
 	// Never persist card-like data in orders; keep only non-sensitive payment hints.
 	safePaymentInfo := models.PaymentInfo{
 		UPIID:      paymentInfo.UPIID,
@@ -397,6 +404,20 @@ func isCODPaymentMethod(method string) bool {
 	return m == "cod" || m == "cash_on_delivery"
 }
 
+// fulfillmentBlockReason returns a non-empty reason when an order in the given
+// state must NOT be fulfilled (label purchased / shipped). Empty string = OK.
+// COD is exempt from the paid check since it settles on delivery.
+func fulfillmentBlockReason(status, paymentMethod, paymentStatus string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "shipped", "delivered", "cancelled", "returned":
+		return fmt.Sprintf("order cannot be fulfilled in status %q", status)
+	}
+	if !isCODPaymentMethod(paymentMethod) && strings.ToLower(strings.TrimSpace(paymentStatus)) != "paid" {
+		return fmt.Sprintf("order cannot be fulfilled until payment is completed (payment status %q)", paymentStatus)
+	}
+	return ""
+}
+
 func orderMarketFromShippingCountry(country string) string {
 	norm, ok := normalizeSupportedCountry(country)
 	if !ok {
@@ -551,18 +572,47 @@ func (s *orderService) FulfillOrder(ctx context.Context, id primitive.ObjectID) 
 	if err != nil {
 		return nil, err
 	}
-	if order.Status == "shipped" || order.Status == "delivered" || order.Status == "cancelled" || order.Status == "returned" {
-		return nil, fmt.Errorf("order cannot be fulfilled in status %q", order.Status)
+	if reason := fulfillmentBlockReason(order.Status, order.PaymentMethod, order.PaymentStatus); reason != "" {
+		return nil, errors.New(reason)
 	}
 
-	// Fulfill at the order's real captured weight (falls back to carrier default if 0).
-	trackingNumber, labelURL, err := s.shippingService.FulfillShipment(ctx, order, order.ShippingWeightLb)
-	if err != nil {
-		return nil, fmt.Errorf("carrier label purchase failed: %w", err)
+	// Re-fulfill must be idempotent and concurrency-safe — buying a shipping label
+	// charges money, so two clicks / a retry must never buy two labels.
+	existingTracking := ""
+	if order.TrackingNumber != nil {
+		existingTracking = strings.TrimSpace(*order.TrackingNumber)
 	}
-
-	if err := s.orderRepo.SetTrackingNumber(ctx, id, trackingNumber, labelURL); err != nil {
-		return nil, err
+	switch {
+	case existingTracking == repositories.FulfillmentClaimSentinel:
+		// A concurrent fulfill is mid-flight, or a prior attempt bought a label but
+		// failed to persist the real number (that path logs for reconciliation).
+		// Don't ship with the sentinel and don't buy a second label.
+		return nil, errors.New("order fulfillment is already in progress; retry shortly")
+	case existingTracking != "":
+		// A real label already exists from a prior partial attempt — idempotent:
+		// fall through and just (re)advance status.
+	default:
+		// No label yet: atomically claim the exclusive right to buy exactly one.
+		won, cerr := s.orderRepo.ClaimForFulfillment(ctx, id)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if !won {
+			return nil, errors.New("order fulfillment is already in progress; retry shortly")
+		}
+		// Fulfill at the order's real captured weight (falls back to carrier default if 0).
+		trackingNumber, labelURL, ferr := s.shippingService.FulfillShipment(ctx, order, order.ShippingWeightLb)
+		if ferr != nil {
+			_ = s.orderRepo.ReleaseFulfillmentClaim(ctx, id) // clear claim so it can be retried
+			return nil, fmt.Errorf("carrier label purchase failed: %w", ferr)
+		}
+		if serr := s.orderRepo.SetTrackingNumber(ctx, id, trackingNumber, labelURL); serr != nil {
+			// Label is bought (money spent) but the tracking number didn't persist.
+			// Keep the sentinel so we never double-buy, and log loudly for manual
+			// reconciliation (the real tracking/label would otherwise be lost).
+			log.Printf("[FULFILL][CRITICAL] order %s: label purchased (tracking=%q label=%q) but persisting failed: %v — needs manual reconciliation", id.Hex(), trackingNumber, labelURL, serr)
+			return nil, fmt.Errorf("label purchased but could not be saved; flagged for reconciliation: %w", serr)
+		}
 	}
 
 	// UpdateStatus reads the fresh tracking number and fires email/SMS/FCM notifications
@@ -660,6 +710,37 @@ func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID
 	}()
 
 	return nil
+}
+
+func (s *orderService) SweepAbandonedOrders(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().Add(-olderThan)
+	candidates, err := s.orderRepo.FindAbandonedPending(ctx, cutoff, 200)
+	if err != nil {
+		return 0, err
+	}
+	released := 0
+	for _, o := range candidates {
+		// Authoritative COD guard: the Mongo $nin filter is exact-match, but
+		// payment_method may be stored with non-canonical casing/spelling. COD orders
+		// are legitimately pending+unpaid (settle on delivery) and must NEVER be swept.
+		if isCODPaymentMethod(o.PaymentMethod) {
+			continue
+		}
+		// Atomic claim: only the caller that wins the pending->cancelled transition
+		// releases stock, so concurrent sweeps (multiple replicas) can't double-release.
+		won, cerr := s.orderRepo.CompareAndSwapStatus(ctx, o.ID, "pending", "cancelled")
+		if cerr != nil || !won {
+			continue
+		}
+		for _, item := range o.Items {
+			_ = s.productRepo.AtomicStockIncrement(ctx, item.ProductID, item.Size, item.Quantity)
+		}
+		_ = s.AddTrackingUpdate(ctx, o.ID, "cancelled", "System", "Order automatically cancelled: payment not completed within the allowed window.", nil)
+		released++
+		log.Printf("[SWEEP] cancelled abandoned unpaid order %s (created %s); released %d item line(s) of stock",
+			o.OrderNumber, o.CreatedAt.UTC().Format(time.RFC3339), len(o.Items))
+	}
+	return released, nil
 }
 
 func (s *orderService) GetTrackingUpdates(ctx context.Context, orderID primitive.ObjectID) ([]*models.OrderTrackingUpdate, error) {

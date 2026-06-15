@@ -129,6 +129,7 @@ func main() {
 	returnService := services.NewReturnService(returnRepo, orderRepo, productRepo, paymentRepo, paymentService, emailService)
 	videoService := services.NewVideoService(videoRepo)
 	addressService := services.NewAddressService(addressRepo)
+	regionService := services.NewRegionService()
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, userRepo, cfg.GoogleClientID, cfg.GoogleMapsBrowserKey)
@@ -152,6 +153,7 @@ func main() {
 	reviewHandler := handlers.NewReviewHandler(reviewService, productRepo)
 	returnHandler := handlers.NewReturnHandler(returnService)
 	shippingHandler := handlers.NewShippingHandler(shippingService)
+	regionHandler := handlers.NewRegionHandler(configService, regionService)
 	taxHandler := handlers.NewTaxHandler(taxService, stripeUSTax, cfg.OrderDefaultTaxRate)
 	inventoryHandler := handlers.NewInventoryHandler(inventoryService)
 	supportHandler := handlers.NewSupportHandler(supportService)
@@ -431,6 +433,10 @@ func main() {
 		api.GET("/config", adminHandler.GetPublicConfig)
 		api.GET("/content", adminHandler.GetPublicContent)
 
+		// Public region resolver: maps a pincode/ZIP to its market, currency, and
+		// live availability so clients derive their market instead of toggling it.
+		api.GET("/region/resolve", regionHandler.Resolve)
+
 		// Upload (staff only — arbitrary authenticated users must not fill object storage)
 		upload := api.Group("/upload")
 		upload.Use(middleware.AuthRequired())
@@ -559,12 +565,41 @@ func main() {
 		}
 	}
 
-	// Start server - bind to 0.0.0.0 so emulator/other devices can connect
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
+	// Background sweeper: cancel abandoned (pending, unpaid, non-COD) orders and
+	// release their reserved stock so abandoned checkouts don't permanently consume
+	// inventory. Replica-safe via an atomic status claim. 0 TTL disables it.
+	if cfg.OrderAbandonedTTLMinutes > 0 && cfg.OrderSweepIntervalMinutes > 0 {
+		ttl := time.Duration(cfg.OrderAbandonedTTLMinutes) * time.Minute
+		interval := time.Duration(cfg.OrderSweepIntervalMinutes) * time.Minute
+		log.Printf("Abandoned-order sweeper enabled: every %v, TTL %v", interval, ttl)
+		runSweep := func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[SWEEP] recovered from panic: %v", r)
+				}
+			}()
+			if n, err := orderService.SweepAbandonedOrders(context.Background(), ttl); err != nil {
+				log.Printf("[SWEEP] error: %v", err)
+			} else if n > 0 {
+				log.Printf("[SWEEP] released %d abandoned order(s)", n)
+			}
+		}
+		go func() {
+			runSweep() // initial pass on startup (don't wait a full interval)
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for range ticker.C {
+				runSweep()
+			}
+		}()
+	}
+
+	// Start server - bind to 0.0.0.0 so emulator/other devices can connect
 	addr := "0.0.0.0:" + port
 	log.Printf("Server starting on %s (API at http://localhost:%s/api)", addr, port)
 	if err := router.Run(addr); err != nil {
