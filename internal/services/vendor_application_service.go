@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"strings"
 
@@ -61,15 +60,17 @@ func (s *vendorApplicationService) Approve(ctx context.Context, id primitive.Obj
 	if err != nil {
 		return err
 	}
-
-	tempPassword := generateTempPassword()
+	if app.Status != "pending" {
+		return fmt.Errorf("application has already been %s", app.Status)
+	}
 
 	vendor := &models.Vendor{
 		Name:   app.BusinessName,
 		Email:  app.Email,
 		Status: "active",
 	}
-	result, err := s.vendorService.Create(ctx, vendor, tempPassword)
+	// Empty password → vendor service generates a strong temporary password.
+	result, err := s.vendorService.Create(ctx, vendor, "")
 	if err != nil {
 		return err
 	}
@@ -88,15 +89,12 @@ func (s *vendorApplicationService) Reject(ctx context.Context, id primitive.Obje
 	if err != nil {
 		return err
 	}
+	if app.Status != "pending" {
+		return fmt.Errorf("application has already been %s", app.Status)
+	}
 	if err := s.repo.UpdateStatus(ctx, id, "rejected", reason); err != nil {
 		return err
 	}
 	go s.emailService.SendVendorApplicationRejected(app.Email, app.BusinessName, reason)
 	return nil
-}
-
-func generateTempPassword() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return fmt.Sprintf("%X", b)
 }

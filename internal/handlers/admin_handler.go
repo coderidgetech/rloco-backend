@@ -344,13 +344,20 @@ func (h *AdminHandler) UpdateVendor(c *gin.Context) {
 		return
 	}
 
-	var vendor models.Vendor
-	if err := c.ShouldBindJSON(&vendor); err != nil {
+	// Load existing first and bind onto it, so fields omitted from the request
+	// (e.g. permissions, status) are preserved rather than zeroed.
+	vendor, err := h.vendorService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Vendor not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(vendor); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	vendor.ID = id // never let the request body change the immutable id
 
-	if err := h.vendorService.Update(c.Request.Context(), id, &vendor); err != nil {
+	if err := h.vendorService.Update(c.Request.Context(), id, vendor); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

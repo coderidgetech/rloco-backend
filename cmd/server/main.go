@@ -76,6 +76,7 @@ func main() {
 	middleware.SetJWTSecret(cfg.JWTSecret)
 	middleware.ConfigureRateLimit(cfg.APIRateLimitRPM)
 	middleware.ConfigureErrorResponses(cfg.Env == "production")
+	middleware.SetVendorRepoForStatusCheck(vendorRepo) // block suspended vendors
 
 	// Initialize services
 	emailService := services.NewEmailService(cfg.ResendAPIKey, cfg.SMTPFrom, cfg.SMTPFromName, cfg.AppBaseURL, cfg.AdminEmail)

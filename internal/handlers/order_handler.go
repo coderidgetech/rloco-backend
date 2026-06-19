@@ -56,6 +56,36 @@ func (h *OrderHandler) regionAvailability(ctx context.Context, country string) (
 	return regionStatusFromConfig(ctx, h.configService, market)
 }
 
+// vendorScopedOrder returns a copy of order exposing only the vendor's own line
+// items, with customer PII redacted to fulfillment basics (full address, payment
+// identifiers and guest contact removed). Returns nil if the order contains none
+// of the vendor's products. Used by both Get and List so the two stay consistent.
+func vendorScopedOrder(order *models.Order, productIDMap map[primitive.ObjectID]bool) *models.Order {
+	var vitems []models.OrderItem
+	for _, item := range order.Items {
+		if productIDMap[item.ProductID] {
+			vitems = append(vitems, item)
+		}
+	}
+	if len(vitems) == 0 {
+		return nil
+	}
+	vo := *order
+	vo.Items = vitems
+	vo.ShippingInfo = models.ShippingInfo{
+		FirstName: order.ShippingInfo.FirstName,
+		LastName:  order.ShippingInfo.LastName,
+		City:      order.ShippingInfo.City,
+		State:     order.ShippingInfo.State,
+		Country:   order.ShippingInfo.Country,
+		ZipCode:   order.ShippingInfo.ZipCode,
+	}
+	vo.PaymentInfo = models.PaymentInfo{}
+	vo.GuestEmail = nil
+	vo.GuestName = nil
+	return &vo
+}
+
 // getVendorProductIDs gets all product IDs for a vendor
 func (h *OrderHandler) getVendorProductIDs(ctx context.Context, vendorID primitive.ObjectID) ([]primitive.ObjectID, error) {
 	filter := map[string]interface{}{
@@ -159,11 +189,8 @@ func (h *OrderHandler) List(c *gin.Context) {
 		}
 
 		for _, order := range allOrders {
-			for _, item := range order.Items {
-				if productIDMap[item.ProductID] {
-					vendorOrders = append(vendorOrders, order)
-					break
-				}
+			if vo := vendorScopedOrder(order, productIDMap); vo != nil {
+				vendorOrders = append(vendorOrders, vo)
 			}
 		}
 
@@ -284,37 +311,13 @@ func (h *OrderHandler) Get(c *gin.Context) {
 			productIDMap[pid] = true
 		}
 
-		hasVendorProduct := false
-		for _, item := range order.Items {
-			if productIDMap[item.ProductID] {
-				hasVendorProduct = true
-				break
-			}
-		}
-
-		if !hasVendorProduct {
+		// Vendor-scoped view: only their line items, with customer PII redacted.
+		filtered := vendorScopedOrder(order, productIDMap)
+		if filtered == nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: This order does not contain your products"})
 			return
 		}
-
-		// Vendor-scoped view: only their line items; redact customer PII beyond fulfillment basics.
-		filtered := *order
-		var vitems []models.OrderItem
-		for _, item := range order.Items {
-			if productIDMap[item.ProductID] {
-				vitems = append(vitems, item)
-			}
-		}
-		filtered.Items = vitems
-		filtered.ShippingInfo = models.ShippingInfo{
-			FirstName: order.ShippingInfo.FirstName,
-			LastName:  order.ShippingInfo.LastName,
-			City:      order.ShippingInfo.City,
-			State:     order.ShippingInfo.State,
-			Country:   order.ShippingInfo.Country,
-			ZipCode:   order.ShippingInfo.ZipCode,
-		}
-		c.JSON(http.StatusOK, &filtered)
+		c.JSON(http.StatusOK, filtered)
 		return
 	}
 
