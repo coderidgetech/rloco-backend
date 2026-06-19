@@ -56,6 +56,15 @@ func (h *ProductHandler) checkProductOwnership(c *gin.Context, productID primiti
 		return true // Admin can access all products
 	}
 
+	if role == "staff" {
+		// Staff own the house / first-party catalog only (products with no vendor).
+		product, err := h.productService.GetByID(c.Request.Context(), productID)
+		if err != nil {
+			return false
+		}
+		return product.VendorID == nil
+	}
+
 	if role == "vendor" {
 		// Get vendor ID from context
 		vendorID, _ := c.Get("vendor_id")
@@ -134,6 +143,10 @@ func (h *ProductHandler) List(c *gin.Context) {
 				filter["vendor_id"] = vendorIDObj
 			}
 		}
+	}
+	// Staff manage only the house / first-party catalog (products with no vendor).
+	if exists && role == "staff" {
+		filter["house_only"] = true
 	}
 
 	if category := c.Query("category"); category != "" {

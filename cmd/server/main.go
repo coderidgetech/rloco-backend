@@ -245,18 +245,21 @@ func main() {
 		products := api.Group("/products")
 		{
 			products.GET("", productHandler.List)
+			// Authenticated management list: role scoping in List actually fires here
+			// (admin → all, vendor → own, staff → house). Public "" stays unscoped.
+			products.GET("/manage", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor", "staff"), productHandler.List)
 			products.GET("/featured", productHandler.GetFeatured)
 			products.GET("/new-arrivals", productHandler.GetNewArrivals)
 			products.GET("/on-sale", productHandler.GetOnSale)
 			products.GET("/:id", productHandler.Get)
 			products.GET("/:id/recommendations", productHandler.GetRecommendations)
 			products.GET("/:id/variants", productHandler.GetVariants)
-			products.POST("", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), middleware.RequireVendorPermission("products", "create"), productHandler.Create)
-			products.PUT("/:id", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), middleware.RequireVendorPermission("products", "edit"), productHandler.Update)
-			products.PUT("/:id/variant-group", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), middleware.RequireVendorPermission("products", "manageVariants"), productHandler.SetVariantGroup)
-			products.DELETE("/:id/variant-group", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), middleware.RequireVendorPermission("products", "manageVariants"), productHandler.UnsetVariantGroup)
-			products.DELETE("/:id", middleware.AuthRequired(), middleware.RequireRole("admin"), productHandler.Delete)
-			products.POST("/:id/images", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor"), middleware.RequireVendorPermission("products", "manageImages"), productHandler.UploadImages)
+			products.POST("", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor", "staff"), middleware.RequireVendorPermission("products", "create"), productHandler.Create)
+			products.PUT("/:id", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor", "staff"), middleware.RequireVendorPermission("products", "edit"), productHandler.Update)
+			products.PUT("/:id/variant-group", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor", "staff"), middleware.RequireVendorPermission("products", "manageVariants"), productHandler.SetVariantGroup)
+			products.DELETE("/:id/variant-group", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor", "staff"), middleware.RequireVendorPermission("products", "manageVariants"), productHandler.UnsetVariantGroup)
+			products.DELETE("/:id", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "staff"), productHandler.Delete)
+			products.POST("/:id/images", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), middleware.RequireRole("admin", "vendor", "staff"), middleware.RequireVendorPermission("products", "manageImages"), productHandler.UploadImages)
 		}
 
 		// Categories
@@ -491,6 +494,10 @@ func main() {
 			admin.PUT("/vendors/:id", middleware.RequireRole("admin"), adminHandler.UpdateVendor)
 			admin.DELETE("/vendors/:id", middleware.RequireRole("admin"), adminHandler.DeleteVendor)
 			admin.PUT("/vendors/:id/permissions", middleware.RequireRole("admin"), adminHandler.UpdateVendorPermissions)
+
+			// Internal staff (first-party operations) — admin-managed
+			admin.GET("/staff", middleware.RequireRole("admin"), adminHandler.ListStaff)
+			admin.POST("/staff", middleware.RequireRole("admin"), adminHandler.CreateStaff)
 
 			// Promotions
 			admin.GET("/promotions", middleware.RequireRole("admin"), adminHandler.ListPromotions)

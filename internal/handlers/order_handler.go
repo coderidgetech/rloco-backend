@@ -86,6 +86,64 @@ func vendorScopedOrder(order *models.Order, productIDMap map[primitive.ObjectID]
 	return &vo
 }
 
+// idSet builds a lookup set from a slice of product IDs.
+func idSet(ids []primitive.ObjectID) map[primitive.ObjectID]bool {
+	m := make(map[primitive.ObjectID]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+// getHouseProductIDs returns the IDs of all house / first-party products (no vendor).
+func (h *OrderHandler) getHouseProductIDs(ctx context.Context) ([]primitive.ObjectID, error) {
+	products, _, err := h.productService.List(ctx, map[string]interface{}{"house_only": true}, 1000, 0, "newest")
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]primitive.ObjectID, 0, len(products))
+	for _, p := range products {
+		ids = append(ids, p.ID)
+	}
+	return ids, nil
+}
+
+// respondScopedOrders fetches orders, keeps only those containing a product in
+// productIDMap (redacted to that scope via vendorScopedOrder), paginates, and writes
+// the JSON response. Shared by the vendor (own products) and staff (house) branches.
+func (h *OrderHandler) respondScopedOrders(c *gin.Context, productIDMap map[primitive.ObjectID]bool, limit, skip int) {
+	filter := make(map[string]interface{})
+	if status := c.Query("status"); status != "" {
+		filter["status"] = status
+	}
+	allOrders, _, err := h.orderService.List(c.Request.Context(), filter, limit*10, skip) // over-fetch to filter in memory
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	scoped := make([]*models.Order, 0)
+	for _, order := range allOrders {
+		if so := vendorScopedOrder(order, productIDMap); so != nil {
+			scoped = append(scoped, so)
+		}
+	}
+
+	start := skip
+	if start > len(scoped) {
+		start = len(scoped)
+	}
+	end := start + limit
+	if end > len(scoped) {
+		end = len(scoped)
+	}
+	if start < len(scoped) {
+		c.JSON(http.StatusOK, gin.H{"orders": scoped[start:end], "total": int64(len(scoped))})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"orders": []*models.Order{}, "total": int64(len(scoped))})
+	}
+}
+
 // getVendorProductIDs gets all product IDs for a vendor
 func (h *OrderHandler) getVendorProductIDs(ctx context.Context, vendorID primitive.ObjectID) ([]primitive.ObjectID, error) {
 	filter := map[string]interface{}{
@@ -161,60 +219,24 @@ func (h *OrderHandler) List(c *gin.Context) {
 			return
 		}
 
-		// Get vendor's product IDs
+		// Get vendor's product IDs and respond with orders scoped to them.
 		productIDs, err := h.getVendorProductIDs(c.Request.Context(), *vendorIDObj)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get vendor products"})
 			return
 		}
+		h.respondScopedOrders(c, idSet(productIDs), limit, skip)
+		return
+	}
 
-		// Filter orders to only include those with vendor's products
-		// Note: This requires order service to support product ID filtering
-		// For now, we'll get all orders and filter in memory (not ideal for large datasets)
-		filter := make(map[string]interface{})
-		if status := c.Query("status"); status != "" {
-			filter["status"] = status
-		}
-		allOrders, _, err := h.orderService.List(c.Request.Context(), filter, limit*10, skip) // Get more to filter
+	if role == "staff" {
+		// Staff see only orders containing house / first-party products.
+		productIDs, err := h.getHouseProductIDs(c.Request.Context())
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get house products"})
 			return
 		}
-
-		// Filter orders that contain vendor's products
-		vendorOrders := make([]*models.Order, 0)
-		productIDMap := make(map[primitive.ObjectID]bool)
-		for _, pid := range productIDs {
-			productIDMap[pid] = true
-		}
-
-		for _, order := range allOrders {
-			if vo := vendorScopedOrder(order, productIDMap); vo != nil {
-				vendorOrders = append(vendorOrders, vo)
-			}
-		}
-
-		// Apply pagination to filtered results
-		start := skip
-		if start > len(vendorOrders) {
-			start = len(vendorOrders)
-		}
-		end := start + limit
-		if end > len(vendorOrders) {
-			end = len(vendorOrders)
-		}
-
-		if start < len(vendorOrders) {
-			c.JSON(http.StatusOK, gin.H{
-				"orders": vendorOrders[start:end],
-				"total":  int64(len(vendorOrders)),
-			})
-		} else {
-			c.JSON(http.StatusOK, gin.H{
-				"orders": []*models.Order{},
-				"total":  int64(len(vendorOrders)),
-			})
-		}
+		h.respondScopedOrders(c, idSet(productIDs), limit, skip)
 		return
 	}
 
@@ -315,6 +337,22 @@ func (h *OrderHandler) Get(c *gin.Context) {
 		filtered := vendorScopedOrder(order, productIDMap)
 		if filtered == nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: This order does not contain your products"})
+			return
+		}
+		c.JSON(http.StatusOK, filtered)
+		return
+	}
+
+	if role == "staff" {
+		// Staff can only see orders containing house / first-party products.
+		productIDs, err := h.getHouseProductIDs(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get house products"})
+			return
+		}
+		filtered := vendorScopedOrder(order, idSet(productIDs))
+		if filtered == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: This order does not contain house products"})
 			return
 		}
 		c.JSON(http.StatusOK, filtered)
