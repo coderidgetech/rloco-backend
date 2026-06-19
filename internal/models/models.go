@@ -21,6 +21,9 @@ type User struct {
 	City         string              `bson:"city,omitempty" json:"city,omitempty"`
 	Active       bool                `bson:"active" json:"active"` // User account status
 	EmailVerified bool               `bson:"email_verified" json:"email_verified"`
+	// MustResetPassword forces a vendor issued a temporary password to set a new one
+	// before performing any write. No bson omitempty so clearing it (false) persists.
+	MustResetPassword bool           `bson:"must_reset_password" json:"must_reset_password,omitempty"`
 	FCMTokens    []string            `bson:"fcm_tokens,omitempty" json:"-"` // Firebase Cloud Messaging device tokens (max 5)
 	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`

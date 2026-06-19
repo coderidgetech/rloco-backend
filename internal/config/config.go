@@ -153,7 +153,7 @@ func Load() (*Config, error) {
 		ResendAPIKey:        getEnv("RESEND_API_KEY", ""),
 		SMTPFrom:            firstNonEmptyEnvWithDefault("noreply@rloco.com", "SMTP_FROM", "SMTP_FROM_EMAIL", "EMAIL_FROM"),
 		SMTPFromName:        firstNonEmptyEnvWithDefault("Rloko", "SMTP_FROM_NAME", "EMAIL_FROM_NAME"),
-		AppBaseURL:          getEnv("APP_BASE_URL", "https://rloco.com"),
+		AppBaseURL:          getEnv("APP_BASE_URL", "https://dev.rloko.com"), // rloko.com is parked; dev.rloko.com is the live host
 		AdminEmail:          getEnv("ADMIN_EMAIL", ""),
 		StripeSecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),

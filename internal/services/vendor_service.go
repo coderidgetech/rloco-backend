@@ -122,13 +122,17 @@ func (s *vendorService) Create(ctx context.Context, vendor *models.Vendor, initi
 
 	vendorID := vendor.ID
 	user := &models.User{
-		Email:         vendor.Email,
-		PasswordHash:  string(hashed),
-		Name:          vendor.Name,
-		Role:          "vendor",
-		VendorID:      &vendorID,
-		Active:        true,
-		EmailVerified: false,
+		Email:        vendor.Email,
+		PasswordHash: string(hashed),
+		Name:         vendor.Name,
+		Role:         "vendor",
+		VendorID:     &vendorID,
+		Active:       true,
+		// Admin-created/approved vendors are vetted by the admin who entered the
+		// email, so treat the address as verified.
+		EmailVerified: true,
+		// The vendor didn't choose this password — force a reset before any write.
+		MustResetPassword: true,
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
