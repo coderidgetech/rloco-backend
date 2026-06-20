@@ -11,9 +11,16 @@ import (
 	"rloco-backend/internal/models"
 )
 
+// TaxLine is one taxable line for per-product tax calculation.
+type TaxLine struct {
+	AmountUSD  float64  // taxable amount (USD, post-discount share)
+	TaxCode    string   // Stripe tax code (txcd_…); empty falls back to the global default
+	GSTPercent *float64 // India per-product GST %; nil falls back to the location/default rate
+}
+
 // StripeUSTax calculates US sales tax via Stripe Tax (Tax Calculation API).
 type StripeUSTax interface {
-	Calculate(ctx context.Context, taxableMerchandiseUSD, shippingUSD float64, shipping models.ShippingInfo) (taxUSD float64, err error)
+	Calculate(ctx context.Context, lines []TaxLine, shippingUSD float64, shipping models.ShippingInfo) (taxUSD float64, err error)
 }
 
 type stripeUSTax struct {
@@ -33,17 +40,19 @@ func NewStripeUSTax(secretKey, productTaxCode string) StripeUSTax {
 	}
 }
 
-func (s *stripeUSTax) Calculate(ctx context.Context, taxableMerchandiseUSD, shippingUSD float64, shipping models.ShippingInfo) (float64, error) {
+func (s *stripeUSTax) Calculate(ctx context.Context, lines []TaxLine, shippingUSD float64, shipping models.ShippingInfo) (float64, error) {
 	_ = ctx
-	if taxableMerchandiseUSD < 0 {
-		taxableMerchandiseUSD = 0
-	}
 	if shippingUSD < 0 {
 		shippingUSD = 0
 	}
-	merchCents := int64(math.Round(taxableMerchandiseUSD * 100))
 	shipCents := int64(math.Round(shippingUSD * 100))
-	if merchCents <= 0 && shipCents <= 0 {
+	var totalMerchCents int64
+	for _, ln := range lines {
+		if ln.AmountUSD > 0 {
+			totalMerchCents += int64(math.Round(ln.AmountUSD * 100))
+		}
+	}
+	if totalMerchCents <= 0 && shipCents <= 0 {
 		return 0, nil
 	}
 
@@ -73,14 +82,27 @@ func (s *stripeUSTax) Calculate(ctx context.Context, taxableMerchandiseUSD, ship
 			AddressSource: stripe.String(string(stripe.TaxCalculationCustomerDetailsAddressSourceShipping)),
 		},
 	}
-	if merchCents > 0 {
+	// One Stripe line item per product, each with its own tax code (falls back to
+	// the global default when a product has none).
+	for i, ln := range lines {
+		if ln.AmountUSD <= 0 {
+			continue
+		}
+		cents := int64(math.Round(ln.AmountUSD * 100))
+		if cents <= 0 {
+			continue
+		}
 		li := &stripe.TaxCalculationLineItemParams{
-			Amount:      stripe.Int64(merchCents),
-			Reference:   stripe.String("merchandise"),
+			Amount:      stripe.Int64(cents),
+			Reference:   stripe.String(fmt.Sprintf("merch-%d", i)),
 			TaxBehavior: stripe.String(string(stripe.TaxCalculationLineItemTaxBehaviorExclusive)),
 		}
-		if s.productTaxCode != "" {
-			li.TaxCode = stripe.String(s.productTaxCode)
+		code := strings.TrimSpace(ln.TaxCode)
+		if code == "" {
+			code = s.productTaxCode
+		}
+		if code != "" {
+			li.TaxCode = stripe.String(code)
 		}
 		params.LineItems = append(params.LineItems, li)
 	}

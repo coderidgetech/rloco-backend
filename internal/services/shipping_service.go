@@ -35,6 +35,10 @@ type ShippingQuoteRequest struct {
 	Phone      string
 	Subtotal   float64
 	Weight     *float64
+	// Aggregate parcel dimensions (cm) from the order's products; optional.
+	LengthCm *float64
+	WidthCm  *float64
+	HeightCm *float64
 }
 
 type shippingService struct {
@@ -113,7 +117,12 @@ func (s *shippingService) calculateShippoShipping(ctx context.Context, req Shipp
 		return nil, nil
 	}
 
-	return s.shippo.quoteRates(ctx, destination, req.Weight)
+	var dims *parcelDims
+	if req.LengthCm != nil && req.WidthCm != nil && req.HeightCm != nil &&
+		*req.LengthCm > 0 && *req.WidthCm > 0 && *req.HeightCm > 0 {
+		dims = &parcelDims{Length: *req.LengthCm, Width: *req.WidthCm, Height: *req.HeightCm}
+	}
+	return s.shippo.quoteRates(ctx, destination, req.Weight, dims)
 }
 
 func (s *shippingService) calculateStoredShipping(ctx context.Context, country string, subtotal float64, weight *float64) ([]*models.ShippingMethod, error) {
