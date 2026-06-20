@@ -64,13 +64,18 @@ func (h *CategoryHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var category models.Category
-	if err := c.ShouldBindJSON(&category); err != nil {
+	category, err := h.categoryService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Category not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(category); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	category.ID = id
 
-	if err := h.categoryService.Update(c.Request.Context(), id, &category); err != nil {
+	if err := h.categoryService.Update(c.Request.Context(), id, category); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
