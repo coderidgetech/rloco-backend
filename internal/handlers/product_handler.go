@@ -148,6 +148,10 @@ func (h *ProductHandler) List(c *gin.Context) {
 	if exists && role == "staff" {
 		filter["house_only"] = true
 	}
+	// Public (unauthenticated / customer) requests never see draft products.
+	if !(exists && (role == "admin" || role == "vendor" || role == "staff")) {
+		filter["exclude_draft"] = true
+	}
 
 	if category := c.Query("category"); category != "" {
 		filter["category"] = category
@@ -260,6 +264,23 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		OnSale           bool           `json:"on_sale"`
 		IsGift           bool           `json:"is_gift"`
 		Stock            map[string]int `json:"stock"`
+		Badge            *string        `json:"badge,omitempty"`
+		VideoURL         *string        `json:"video_url,omitempty"`
+		Status           string         `json:"status"`
+		Brand            string         `json:"brand"`
+		Barcode          string         `json:"barcode"`
+		CountryOfOrigin  string         `json:"country_of_origin"`
+		Tags             []string       `json:"tags"`
+		CostPrice        *float64       `json:"cost_price,omitempty"`
+		Weight           *float64       `json:"weight,omitempty"`
+		LengthCm         *float64       `json:"length_cm,omitempty"`
+		WidthCm          *float64       `json:"width_cm,omitempty"`
+		HeightCm         *float64       `json:"height_cm,omitempty"`
+		HSNCode          string         `json:"hsn_code"`
+		TaxCode          string         `json:"tax_code"`
+		GSTPercent       *float64       `json:"gst_percent,omitempty"`
+		MetaTitle        string         `json:"meta_title"`
+		MetaDescription  string         `json:"meta_description"`
 	}
 
 	if err := c.ShouldBindJSON(&product); err != nil {
@@ -290,6 +311,23 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		OnSale:           product.OnSale,
 		IsGift:           product.IsGift,
 		Stock:            product.Stock,
+		Badge:            product.Badge,
+		VideoURL:         product.VideoURL,
+		Status:           product.Status,
+		Brand:            product.Brand,
+		Barcode:          product.Barcode,
+		CountryOfOrigin:  product.CountryOfOrigin,
+		Tags:             product.Tags,
+		CostPrice:        product.CostPrice,
+		Weight:           product.Weight,
+		LengthCm:         product.LengthCm,
+		WidthCm:          product.WidthCm,
+		HeightCm:         product.HeightCm,
+		HSNCode:          product.HSNCode,
+		TaxCode:          product.TaxCode,
+		GSTPercent:       product.GSTPercent,
+		MetaTitle:        product.MetaTitle,
+		MetaDescription:  product.MetaDescription,
 		Rating:           0,
 		Reviews:          0,
 	}
@@ -446,11 +484,82 @@ func (h *ProductHandler) Update(c *gin.Context) {
 		}
 	}
 
-	// Ensure vendor_id cannot be changed by vendors
-	role, exists := c.Get("role")
-	if exists && role == "vendor" {
-		// Vendor ID is already preserved from existingProduct
+	// Newly-captured product fields
+	if v, ok := updates["status"].(string); ok {
+		existingProduct.Status = v
 	}
+	if v, ok := updates["brand"].(string); ok {
+		existingProduct.Brand = v
+	}
+	if v, ok := updates["barcode"].(string); ok {
+		existingProduct.Barcode = v
+	}
+	if v, ok := updates["country_of_origin"].(string); ok {
+		existingProduct.CountryOfOrigin = v
+	}
+	if v, ok := updates["hsn_code"].(string); ok {
+		existingProduct.HSNCode = v
+	}
+	if v, ok := updates["tax_code"].(string); ok {
+		existingProduct.TaxCode = v
+	}
+	if v, ok := updates["meta_title"].(string); ok {
+		existingProduct.MetaTitle = v
+	}
+	if v, ok := updates["meta_description"].(string); ok {
+		existingProduct.MetaDescription = v
+	}
+	if v, ok := updates["gender"].(string); ok && v != "" {
+		existingProduct.Gender = v
+	}
+	if v, ok := updates["category"].(string); ok && v != "" {
+		existingProduct.Category = v
+	}
+	if v, ok := updates["badge"].(string); ok {
+		if v == "" {
+			existingProduct.Badge = nil
+		} else {
+			b := v
+			existingProduct.Badge = &b
+		}
+	}
+	if v, ok := updates["video_url"].(string); ok {
+		if v == "" {
+			existingProduct.VideoURL = nil
+		} else {
+			u := v
+			existingProduct.VideoURL = &u
+		}
+	}
+	if raw, ok := updates["tags"]; ok {
+		if arr, ok := raw.([]interface{}); ok {
+			tags := make([]string, 0, len(arr))
+			for _, v := range arr {
+				if s, ok := v.(string); ok {
+					tags = append(tags, s)
+				}
+			}
+			existingProduct.Tags = tags
+		}
+	}
+	setFloatPtr := func(key string, dst **float64) {
+		if raw, ok := updates[key]; ok {
+			if f, ok := raw.(float64); ok {
+				val := f
+				*dst = &val
+			} else if raw == nil {
+				*dst = nil
+			}
+		}
+	}
+	setFloatPtr("cost_price", &existingProduct.CostPrice)
+	setFloatPtr("weight", &existingProduct.Weight)
+	setFloatPtr("length_cm", &existingProduct.LengthCm)
+	setFloatPtr("width_cm", &existingProduct.WidthCm)
+	setFloatPtr("height_cm", &existingProduct.HeightCm)
+	setFloatPtr("gst_percent", &existingProduct.GSTPercent)
+	setFloatPtr("price_inr", &existingProduct.PriceINR)
+	setFloatPtr("original_price_inr", &existingProduct.OriginalPriceINR)
 
 	if err := h.productService.Update(c.Request.Context(), id, existingProduct); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

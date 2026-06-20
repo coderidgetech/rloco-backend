@@ -109,6 +109,11 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 		if houseOnly, ok := filter["house_only"].(bool); ok && houseOnly {
 			bsonFilter["vendor_id"] = nil
 		}
+		// Hide draft products from the public storefront. {$ne:"draft"} keeps legacy
+		// products (no status field) and active ones visible.
+		if excl, ok := filter["exclude_draft"].(bool); ok && excl {
+			bsonFilter["status"] = bson.M{"$ne": "draft"}
+		}
 	}
 
 	if market, ok := filter["market"].(string); ok && (market == "IN" || market == "US") {

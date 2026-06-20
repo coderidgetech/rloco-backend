@@ -105,6 +105,7 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	// Reprice and validate all incoming items from authoritative product catalog.
 	validatedItems := make([]models.OrderItem, 0, len(items))
 	var subtotal float64
+	var orderWeightLb float64
 	for _, item := range items {
 		if item.Quantity <= 0 {
 			return nil, errors.New("invalid quantity")
@@ -133,12 +134,15 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		sanitized.Price = price
 		validatedItems = append(validatedItems, sanitized)
 		subtotal += price * float64(item.Quantity)
+
+		// Accumulate real shipping weight from the product (kg → lb), default when unset.
+		itemWeightLb := DefaultItemWeightLb
+		if product.Weight != nil && *product.Weight > 0 {
+			itemWeightLb = *product.Weight * 2.20462
+		}
+		orderWeightLb += itemWeightLb * float64(item.Quantity)
 	}
 
-	var orderWeightLb float64
-	for _, it := range validatedItems {
-		orderWeightLb += DefaultItemWeightLb * float64(it.Quantity)
-	}
 	if orderWeightLb <= 0 {
 		orderWeightLb = DefaultItemWeightLb
 	}
