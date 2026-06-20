@@ -114,6 +114,7 @@ func (r *reviewRepository) GetByUserID(ctx context.Context, userID primitive.Obj
 
 func (r *reviewRepository) Update(ctx context.Context, id primitive.ObjectID, review *models.ProductReview) error {
 	review.UpdatedAt = time.Now()
+	review.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

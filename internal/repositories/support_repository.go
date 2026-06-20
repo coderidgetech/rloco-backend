@@ -105,6 +105,7 @@ func (r *supportRepository) List(ctx context.Context, filter bson.M, limit, skip
 
 func (r *supportRepository) Update(ctx context.Context, id primitive.ObjectID, ticket *models.SupportTicket) error {
 	ticket.UpdatedAt = time.Now()
+	ticket.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

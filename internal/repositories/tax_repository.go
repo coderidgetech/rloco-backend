@@ -125,6 +125,7 @@ func (r *taxRepository) List(ctx context.Context, activeOnly bool) ([]*models.Ta
 }
 
 func (r *taxRepository) Update(ctx context.Context, id primitive.ObjectID, rate *models.TaxRate) error {
+	rate.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

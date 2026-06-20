@@ -56,6 +56,7 @@ func (r *categoryRepository) GetBySlug(ctx context.Context, slug string) (*model
 }
 
 func (r *categoryRepository) Update(ctx context.Context, id primitive.ObjectID, category *models.Category) error {
+	category.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

@@ -52,6 +52,7 @@ func (r *videoRepository) GetByID(ctx context.Context, id primitive.ObjectID) (*
 
 func (r *videoRepository) Update(ctx context.Context, id primitive.ObjectID, video *models.InspirationVideo) error {
 	video.UpdatedAt = time.Now()
+	video.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

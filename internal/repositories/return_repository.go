@@ -135,6 +135,7 @@ func (r *returnRepository) List(ctx context.Context, filter bson.M, limit, skip 
 
 func (r *returnRepository) Update(ctx context.Context, id primitive.ObjectID, returnReq *models.Return) error {
 	returnReq.UpdatedAt = time.Now()
+	returnReq.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
