@@ -113,6 +113,21 @@ func (r *productRepository) Update(ctx context.Context, id primitive.ObjectID, p
 		"rating":             product.Rating,
 		"reviews":             product.Reviews,
 		"available_markets":   product.AvailableMarkets,
+		"status":             product.Status,
+		"brand":              product.Brand,
+		"barcode":            product.Barcode,
+		"country_of_origin":  product.CountryOfOrigin,
+		"tags":               product.Tags,
+		"cost_price":         product.CostPrice,
+		"weight":             product.Weight,
+		"length_cm":          product.LengthCm,
+		"width_cm":           product.WidthCm,
+		"height_cm":          product.HeightCm,
+		"hsn_code":           product.HSNCode,
+		"tax_code":           product.TaxCode,
+		"gst_percent":        product.GSTPercent,
+		"meta_title":         product.MetaTitle,
+		"meta_description":   product.MetaDescription,
 		"updated_at":          product.UpdatedAt,
 	}
 	
@@ -166,6 +181,7 @@ func (r *productRepository) List(ctx context.Context, filter bson.M, limit, skip
 func (r *productRepository) GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error) {
 	filter := MergeMarketFilter(bson.M{
 		"featured": true,
+		"status":   bson.M{"$ne": "draft"},
 		"$or":      []bson.M{{"variant_group_id": nil}, {"is_main_variant": true}},
 	}, market)
 	cursor, err := r.collection.Find(
@@ -188,6 +204,7 @@ func (r *productRepository) GetFeatured(ctx context.Context, limit int, market s
 func (r *productRepository) GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error) {
 	filter := MergeMarketFilter(bson.M{
 		"new_arrival": true,
+		"status":      bson.M{"$ne": "draft"},
 		"$or":         []bson.M{{"variant_group_id": nil}, {"is_main_variant": true}},
 	}, market)
 	cursor, err := r.collection.Find(
@@ -208,7 +225,7 @@ func (r *productRepository) GetNewArrivals(ctx context.Context, limit int, marke
 }
 
 func (r *productRepository) GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error) {
-	filter := MergeMarketFilter(bson.M{"on_sale": true}, market)
+	filter := MergeMarketFilter(bson.M{"on_sale": true, "status": bson.M{"$ne": "draft"}}, market)
 	cursor, err := r.collection.Find(
 		ctx,
 		filter,
@@ -228,6 +245,7 @@ func (r *productRepository) GetOnSale(ctx context.Context, limit int, market str
 
 func (r *productRepository) Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error) {
 	filter := bson.M{
+		"status": bson.M{"$ne": "draft"},
 		"$or": []bson.M{
 			{"name": bson.M{"$regex": query, "$options": "i"}},
 			{"sku": bson.M{"$regex": query, "$options": "i"}},

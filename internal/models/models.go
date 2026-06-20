@@ -64,8 +64,36 @@ type Product struct {
 	VariantGroupID *primitive.ObjectID `bson:"variant_group_id,omitempty" json:"variant_group_id,omitempty"`
 	Color          string              `bson:"color,omitempty" json:"color,omitempty"`
 	IsMainVariant  bool                `bson:"is_main_variant,omitempty" json:"is_main_variant,omitempty"`
-	CreatedAt      time.Time           `bson:"created_at" json:"created_at"`
-	UpdatedAt      time.Time           `bson:"updated_at" json:"updated_at"`
+
+	// Publishing — draft products are hidden from the public storefront.
+	Status string `bson:"status,omitempty" json:"status,omitempty"` // "draft" | "active" (empty = active, legacy)
+
+	// Catalog / identity
+	Brand           string   `bson:"brand,omitempty" json:"brand,omitempty"`
+	Barcode         string   `bson:"barcode,omitempty" json:"barcode,omitempty"`
+	CountryOfOrigin string   `bson:"country_of_origin,omitempty" json:"country_of_origin,omitempty"`
+	Tags            []string `bson:"tags,omitempty" json:"tags,omitempty"`
+
+	// Pricing extras (PriceINR/OriginalPriceINR above). CostPrice is the vendor's cost.
+	CostPrice *float64 `bson:"cost_price,omitempty" json:"cost_price,omitempty"`
+
+	// Shipping — weight (kg) + dimensions (cm) for accurate carrier rates.
+	Weight   *float64 `bson:"weight,omitempty" json:"weight,omitempty"`
+	LengthCm *float64 `bson:"length_cm,omitempty" json:"length_cm,omitempty"`
+	WidthCm  *float64 `bson:"width_cm,omitempty" json:"width_cm,omitempty"`
+	HeightCm *float64 `bson:"height_cm,omitempty" json:"height_cm,omitempty"`
+
+	// Tax — HSN/GST for India, Stripe tax code for US (captured; per-line consumption TBD).
+	HSNCode    string   `bson:"hsn_code,omitempty" json:"hsn_code,omitempty"`
+	TaxCode    string   `bson:"tax_code,omitempty" json:"tax_code,omitempty"` // Stripe txcd_…
+	GSTPercent *float64 `bson:"gst_percent,omitempty" json:"gst_percent,omitempty"`
+
+	// SEO
+	MetaTitle       string `bson:"meta_title,omitempty" json:"meta_title,omitempty"`
+	MetaDescription string `bson:"meta_description,omitempty" json:"meta_description,omitempty"`
+
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 // LowStockItem is one product×size row returned by the inventory API.
