@@ -147,7 +147,10 @@ func (c *shippoClient) canQuote() bool {
 		c.parcel.MassUnit != ""
 }
 
-func (c *shippoClient) parcelForQuote(weightLb *float64) shippoParcel {
+// parcelDims is an order's aggregate parcel size in centimetres.
+type parcelDims struct{ Length, Width, Height float64 }
+
+func (c *shippoClient) parcelForQuote(weightLb *float64, dims *parcelDims) shippoParcel {
 	p := c.parcel
 	if weightLb != nil && *weightLb > 0 {
 		w := *weightLb
@@ -156,10 +159,18 @@ func (c *shippoClient) parcelForQuote(weightLb *float64) shippoParcel {
 		}
 		p.Weight = strconv.FormatFloat(w, 'f', 2, 64)
 	}
+	// Real product dimensions (cm) override the configured default box. Mass unit
+	// stays as configured (lb); distance unit is set to cm for these values.
+	if dims != nil && dims.Length > 0 && dims.Width > 0 && dims.Height > 0 {
+		p.Length = strconv.FormatFloat(dims.Length, 'f', 2, 64)
+		p.Width = strconv.FormatFloat(dims.Width, 'f', 2, 64)
+		p.Height = strconv.FormatFloat(dims.Height, 'f', 2, 64)
+		p.DistanceUnit = "cm"
+	}
 	return p
 }
 
-func (c *shippoClient) quoteRates(ctx context.Context, destination shippoAddress, weightLb *float64) ([]*models.ShippingMethod, error) {
+func (c *shippoClient) quoteRates(ctx context.Context, destination shippoAddress, weightLb *float64, dims *parcelDims) ([]*models.ShippingMethod, error) {
 	if !c.canQuote() {
 		return nil, fmt.Errorf("shippo is not fully configured")
 	}
@@ -170,7 +181,7 @@ func (c *shippoClient) quoteRates(ctx context.Context, destination shippoAddress
 	payload := shippoShipmentRequest{
 		AddressFrom: c.origin,
 		AddressTo:   destination,
-		Parcels:     []shippoParcel{c.parcelForQuote(weightLb)},
+		Parcels:     []shippoParcel{c.parcelForQuote(weightLb, dims)},
 		Async:       false,
 	}
 
@@ -317,7 +328,7 @@ func (c *shippoClient) purchaseLabel(ctx context.Context, destination shippoAddr
 	payload := shippoShipmentRequest{
 		AddressFrom: c.origin,
 		AddressTo:   destination,
-		Parcels:     []shippoParcel{c.parcelForQuote(weightLb)},
+		Parcels:     []shippoParcel{c.parcelForQuote(weightLb, nil)},
 		Async:       false,
 	}
 	body, err := json.Marshal(payload)

@@ -60,7 +60,7 @@ func (h *TaxHandler) Calculate(c *gin.Context) {
 		if req.AddressLine1 != nil {
 			addr = *req.AddressLine1
 		}
-		taxAmount, err := h.stripeUS.Calculate(c.Request.Context(), req.Subtotal, shipUSD, models.ShippingInfo{
+		taxAmount, err := h.stripeUS.Calculate(c.Request.Context(), []services.TaxLine{{AmountUSD: req.Subtotal}}, shipUSD, models.ShippingInfo{
 			Address: addr,
 			City:    city,
 			State:   state,

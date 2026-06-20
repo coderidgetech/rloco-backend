@@ -106,6 +106,8 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	validatedItems := make([]models.OrderItem, 0, len(items))
 	var subtotal float64
 	var orderWeightLb float64
+	var maxLengthCm, maxWidthCm, sumHeightCm float64
+	var taxLines []TaxLine
 	for _, item := range items {
 		if item.Quantity <= 0 {
 			return nil, errors.New("invalid quantity")
@@ -135,12 +137,44 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		validatedItems = append(validatedItems, sanitized)
 		subtotal += price * float64(item.Quantity)
 
+		// Per-product tax inputs (amount in the order's currency; USD for US, INR for IN).
+		taxCode := ""
+		if product.TaxCode != "" {
+			taxCode = product.TaxCode
+		}
+		taxLines = append(taxLines, TaxLine{
+			AmountUSD:  price * float64(item.Quantity),
+			TaxCode:    taxCode,
+			GSTPercent: product.GSTPercent,
+		})
+
 		// Accumulate real shipping weight from the product (kg → lb), default when unset.
 		itemWeightLb := DefaultItemWeightLb
 		if product.Weight != nil && *product.Weight > 0 {
 			itemWeightLb = *product.Weight * 2.20462
 		}
 		orderWeightLb += itemWeightLb * float64(item.Quantity)
+
+		// Aggregate parcel box (cm): widest L/W, stacked height.
+		if product.LengthCm != nil && *product.LengthCm > maxLengthCm {
+			maxLengthCm = *product.LengthCm
+		}
+		if product.WidthCm != nil && *product.WidthCm > maxWidthCm {
+			maxWidthCm = *product.WidthCm
+		}
+		if product.HeightCm != nil && *product.HeightCm > 0 {
+			sumHeightCm += *product.HeightCm * float64(item.Quantity)
+		}
+	}
+	var lenCmPtr, widCmPtr, heiCmPtr *float64
+	if maxLengthCm > 0 {
+		lenCmPtr = &maxLengthCm
+	}
+	if maxWidthCm > 0 {
+		widCmPtr = &maxWidthCm
+	}
+	if sumHeightCm > 0 {
+		heiCmPtr = &sumHeightCm
 	}
 
 	if orderWeightLb <= 0 {
@@ -191,6 +225,9 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 			Phone:      shippingInfo.Phone,
 			Subtotal:   subtotal,
 			Weight:     &weightPtr,
+			LengthCm:   lenCmPtr,
+			WidthCm:    widCmPtr,
+			HeightCm:   heiCmPtr,
 		})
 		if err == nil && len(methods) > 0 {
 			// Honor the customer's chosen rate when supplied; otherwise default to the
@@ -234,9 +271,22 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 		taxRate = 0
 	}
 	tax := taxable * taxRate
+
+	// Distribute the order discount across the per-product tax lines so they sum to
+	// the discounted taxable, then drive tax per product (Stripe tax code for US,
+	// GST % for India), falling back to the global/location rate when unset.
+	scale := 1.0
+	if subtotal > 0 {
+		scale = taxable / subtotal
+	}
+	scaledLines := make([]TaxLine, len(taxLines))
+	for i, ln := range taxLines {
+		scaledLines[i] = TaxLine{AmountUSD: ln.AmountUSD * scale, TaxCode: ln.TaxCode, GSTPercent: ln.GSTPercent}
+	}
+
 	if orderMarket == "US" {
 		if s.stripeUS != nil {
-			if t, err := s.stripeUS.Calculate(ctx, taxable, shippingCost, shippingInfo); err == nil {
+			if t, err := s.stripeUS.Calculate(ctx, scaledLines, shippingCost, shippingInfo); err == nil {
 				tax = t
 			} else if s.taxService != nil {
 				if calculatedTax, _, err := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, taxable); err == nil {
@@ -249,9 +299,21 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 			}
 		}
 	} else if s.taxService != nil {
-		if calculatedTax, _, err := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, taxable); err == nil {
-			tax = calculatedTax
+		// India: per-product GST, defaulting to the location/configured rate.
+		_, locRate, _ := s.taxService.CalculateTax(ctx, shippingInfo.Country, shippingInfo.State, shippingInfo.City, shippingInfo.ZipCode, taxable)
+		defaultRate := 18.0
+		if locRate != nil && locRate.Rate > 0 {
+			defaultRate = locRate.Rate
 		}
+		var inTax float64
+		for _, ln := range scaledLines {
+			r := defaultRate
+			if ln.GSTPercent != nil && *ln.GSTPercent > 0 {
+				r = *ln.GSTPercent
+			}
+			inTax += ln.AmountUSD * r / 100
+		}
+		tax = inTax
 	}
 
 	// Calculate total (include gift packing charge)
