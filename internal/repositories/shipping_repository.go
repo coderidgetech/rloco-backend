@@ -67,6 +67,7 @@ func (r *shippingRepository) List(ctx context.Context, activeOnly bool) ([]*mode
 }
 
 func (r *shippingRepository) Update(ctx context.Context, id primitive.ObjectID, method *models.ShippingMethod) error {
+	method.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

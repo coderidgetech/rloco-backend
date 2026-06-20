@@ -92,13 +92,18 @@ func (h *ShippingHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var method models.ShippingMethod
-	if err := c.ShouldBindJSON(&method); err != nil {
+	method, err := h.shippingService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Shipping method not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(method); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	method.ID = id
 
-	if err := h.shippingService.Update(c.Request.Context(), id, &method); err != nil {
+	if err := h.shippingService.Update(c.Request.Context(), id, method); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

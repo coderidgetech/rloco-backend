@@ -57,6 +57,7 @@ func (r *promotionRepository) GetByCode(ctx context.Context, code string) (*mode
 }
 
 func (r *promotionRepository) Update(ctx context.Context, id primitive.ObjectID, promotion *models.Promotion) error {
+	promotion.ID = id // pin _id so $set never changes the immutable field
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},

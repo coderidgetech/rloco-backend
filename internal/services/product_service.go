@@ -104,6 +104,11 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 		if vendorID, ok := filter["vendor_id"]; ok && vendorID != nil {
 			bsonFilter["vendor_id"] = vendorID
 		}
+		// House / first-party catalog: products with no vendor (staff scope).
+		// In Mongo {vendor_id: nil} matches both explicit null and a missing field.
+		if houseOnly, ok := filter["house_only"].(bool); ok && houseOnly {
+			bsonFilter["vendor_id"] = nil
+		}
 	}
 
 	if market, ok := filter["market"].(string); ok && (market == "IN" || market == "US") {

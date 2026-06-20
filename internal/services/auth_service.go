@@ -524,6 +524,7 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentPasswor
 		return err
 	}
 	user.PasswordHash = string(hashed)
+	user.MustResetPassword = false // a chosen password clears the forced-reset gate
 	user.UpdatedAt = time.Now()
 	return s.userRepo.Update(ctx, user.ID, user)
 }

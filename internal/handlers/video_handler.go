@@ -119,13 +119,18 @@ func (h *VideoHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var video models.InspirationVideo
-	if err := c.ShouldBindJSON(&video); err != nil {
+	video, err := h.videoService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(video); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	video.ID = id
 
-	if err := h.videoService.Update(c.Request.Context(), id, &video); err != nil {
+	if err := h.videoService.Update(c.Request.Context(), id, video); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

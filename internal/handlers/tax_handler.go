@@ -150,13 +150,18 @@ func (h *TaxHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var rate models.TaxRate
-	if err := c.ShouldBindJSON(&rate); err != nil {
+	rate, err := h.taxService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Tax rate not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(rate); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	rate.ID = id
 
-	if err := h.taxService.Update(c.Request.Context(), id, &rate); err != nil {
+	if err := h.taxService.Update(c.Request.Context(), id, rate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

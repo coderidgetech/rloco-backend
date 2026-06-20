@@ -29,6 +29,24 @@ func NewProductHandler(productService services.ProductService, storageService se
 }
 
 // checkProductOwnership verifies that a vendor owns the product
+// vendorObjectIDFromContext resolves the authenticated vendor's id from the gin
+// context (set by LoadUserMiddleware from the persisted user, not the JWT).
+func vendorObjectIDFromContext(c *gin.Context) *primitive.ObjectID {
+	v, _ := c.Get("vendor_id")
+	if v == nil {
+		return nil
+	}
+	if id, ok := v.(*primitive.ObjectID); ok {
+		return id
+	}
+	if s, ok := v.(string); ok {
+		if id, err := primitive.ObjectIDFromHex(s); err == nil {
+			return &id
+		}
+	}
+	return nil
+}
+
 func (h *ProductHandler) checkProductOwnership(c *gin.Context, productID primitive.ObjectID) bool {
 	role, exists := c.Get("role")
 	if !exists {
@@ -36,6 +54,15 @@ func (h *ProductHandler) checkProductOwnership(c *gin.Context, productID primiti
 	}
 	if role == "admin" {
 		return true // Admin can access all products
+	}
+
+	if role == "staff" {
+		// Staff own the house / first-party catalog only (products with no vendor).
+		product, err := h.productService.GetByID(c.Request.Context(), productID)
+		if err != nil {
+			return false
+		}
+		return product.VendorID == nil
 	}
 
 	if role == "vendor" {
@@ -116,6 +143,10 @@ func (h *ProductHandler) List(c *gin.Context) {
 				filter["vendor_id"] = vendorIDObj
 			}
 		}
+	}
+	// Staff manage only the house / first-party catalog (products with no vendor).
+	if exists && role == "staff" {
+		filter["house_only"] = true
 	}
 
 	if category := c.Query("category"); category != "" {
@@ -268,25 +299,17 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		productModel.AvailableMarkets = []string{"IN", "US"}
 	}
 
-	// Set vendor_id if user is a vendor (not admin)
+	// Stamp vendor_id for vendor-created products. A vendor MUST have a resolved
+	// vendor id — otherwise we'd create an ownerless product that's live in the
+	// catalog yet invisible to the vendor's own list/ownership checks.
 	role, exists := c.Get("role")
 	if exists && role == "vendor" {
-		vendorID, _ := c.Get("vendor_id")
-		if vendorID != nil {
-			vendorIDObj, ok := vendorID.(*primitive.ObjectID)
-			if !ok {
-				vendorIDStr, ok := vendorID.(string)
-				if ok {
-					id, err := primitive.ObjectIDFromHex(vendorIDStr)
-					if err == nil {
-						vendorIDObj = &id
-					}
-				}
-			}
-			if vendorIDObj != nil {
-				productModel.VendorID = vendorIDObj
-			}
+		vendorIDObj := vendorObjectIDFromContext(c)
+		if vendorIDObj == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Your vendor account is not fully set up; products cannot be created"})
+			return
 		}
+		productModel.VendorID = vendorIDObj
 	}
 
 	if err := h.productService.Create(c.Request.Context(), productModel); err != nil {
@@ -447,6 +470,13 @@ func (h *ProductHandler) Delete(c *gin.Context) {
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		return
+	}
+
+	// Enforce ownership in the handler, not just at the route: a vendor may only
+	// delete their own product (admin passes through checkProductOwnership).
+	if !h.checkProductOwnership(c, id) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to delete this product"})
 		return
 	}
 
