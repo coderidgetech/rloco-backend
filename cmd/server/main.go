@@ -153,7 +153,7 @@ func main() {
 	uploadHandler := handlers.NewUploadHandler(storageService)
 	reviewHandler := handlers.NewReviewHandler(reviewService, productRepo)
 	returnHandler := handlers.NewReturnHandler(returnService)
-	shippingHandler := handlers.NewShippingHandler(shippingService)
+	shippingHandler := handlers.NewShippingHandler(shippingService, productRepo)
 	regionHandler := handlers.NewRegionHandler(configService, regionService)
 	taxHandler := handlers.NewTaxHandler(taxService, stripeUSTax, cfg.OrderDefaultTaxRate)
 	inventoryHandler := handlers.NewInventoryHandler(inventoryService)
