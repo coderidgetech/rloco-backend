@@ -339,6 +339,9 @@ func main() {
 		reviewsMe.Use(middleware.LoadUserMiddleware(userRepo))
 		{
 			reviewsMe.GET("/me", reviewHandler.GetByUser)
+			// Customers may upload review photos (image-type + 5MB enforced by the
+			// handler). Same trust level as /auth/avatar.
+			reviewsMe.POST("/upload", uploadHandler.Upload)
 		}
 
 		// Reviews by product
