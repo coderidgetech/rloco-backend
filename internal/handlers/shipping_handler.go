@@ -6,15 +6,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"rloco-backend/internal/models"
+	"rloco-backend/internal/repositories"
 	"rloco-backend/internal/services"
 )
 
 type ShippingHandler struct {
 	shippingService services.ShippingService
+	productRepo     repositories.ProductRepository
 }
 
-func NewShippingHandler(shippingService services.ShippingService) *ShippingHandler {
-	return &ShippingHandler{shippingService: shippingService}
+func NewShippingHandler(shippingService services.ShippingService, productRepo repositories.ProductRepository) *ShippingHandler {
+	return &ShippingHandler{shippingService: shippingService, productRepo: productRepo}
 }
 
 func (h *ShippingHandler) Calculate(c *gin.Context) {
@@ -30,11 +32,63 @@ func (h *ShippingHandler) Calculate(c *gin.Context) {
 		Phone      string   `json:"phone,omitempty"`
 		Subtotal   float64  `json:"subtotal"` // no "required": Go's validator treats 0 as missing, and 0 is a valid subtotal
 		Weight     *float64 `json:"weight,omitempty"`
+		Items      []struct {
+			ProductID string `json:"product_id"`
+			Quantity  int    `json:"quantity"`
+		} `json:"items,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// When the client sends cart items, compute authoritative weight + parcel
+	// dimensions from the catalog (same rule as order fulfillment: max L, max W,
+	// summed H, real per-unit weight) so the checkout estimate matches the rate
+	// the order will actually be charged.
+	var lenCm, widCm, heiCm *float64
+	if len(req.Items) > 0 {
+		var weightLb, maxL, maxW, sumH float64
+		for _, it := range req.Items {
+			if it.Quantity <= 0 {
+				continue
+			}
+			oid, oidErr := primitive.ObjectIDFromHex(it.ProductID)
+			if oidErr != nil {
+				continue
+			}
+			p, perr := h.productRepo.GetByID(c.Request.Context(), oid)
+			if perr != nil || p == nil {
+				continue
+			}
+			unitLb := services.DefaultItemWeightLb
+			if p.Weight != nil && *p.Weight > 0 {
+				unitLb = *p.Weight * 2.20462 // model weight is kg
+			}
+			weightLb += unitLb * float64(it.Quantity)
+			if p.LengthCm != nil && *p.LengthCm > maxL {
+				maxL = *p.LengthCm
+			}
+			if p.WidthCm != nil && *p.WidthCm > maxW {
+				maxW = *p.WidthCm
+			}
+			if p.HeightCm != nil && *p.HeightCm > 0 {
+				sumH += *p.HeightCm * float64(it.Quantity)
+			}
+		}
+		if weightLb > 0 {
+			req.Weight = &weightLb
+		}
+		if maxL > 0 {
+			lenCm = &maxL
+		}
+		if maxW > 0 {
+			widCm = &maxW
+		}
+		if sumH > 0 {
+			heiCm = &sumH
+		}
 	}
 
 	methods, err := h.shippingService.CalculateShipping(c.Request.Context(), services.ShippingQuoteRequest{
@@ -49,6 +103,9 @@ func (h *ShippingHandler) Calculate(c *gin.Context) {
 		Phone:      req.Phone,
 		Subtotal:   req.Subtotal,
 		Weight:     req.Weight,
+		LengthCm:   lenCm,
+		WidthCm:    widCm,
+		HeightCm:   heiCm,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
