@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -114,6 +115,10 @@ func (h *AuthHandler) SendLoginOTP(c *gin.Context) {
 		return
 	}
 	if err := h.authService.SendLoginOTP(c.Request.Context(), req.Phone); err != nil {
+		if errors.Is(err, services.ErrAccountNotFound) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "USER_NOT_FOUND"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -132,6 +137,10 @@ func (h *AuthHandler) CompleteLoginOTP(c *gin.Context) {
 	}
 	user, token, err := h.authService.LoginWithPhoneOTP(c.Request.Context(), req.Phone, req.Code)
 	if err != nil {
+		if errors.Is(err, services.ErrAccountNotFound) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "USER_NOT_FOUND"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

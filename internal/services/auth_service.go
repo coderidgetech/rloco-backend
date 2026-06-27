@@ -19,6 +19,10 @@ import (
 	"rloco-backend/internal/repositories"
 )
 
+// ErrAccountNotFound signals that no account exists for the given phone (login OTP).
+// Handlers translate it into a structured "USER_NOT_FOUND" code so clients can route to signup.
+var ErrAccountNotFound = errors.New("no account found for this phone number")
+
 type AuthService interface {
 	Register(ctx context.Context, email, password, name string) (*models.User, string, error)
 	Login(ctx context.Context, email, password string) (*models.User, string, error)
@@ -669,7 +673,7 @@ func (s *authService) SendLoginOTP(ctx context.Context, phoneRaw string) error {
 	u, err := s.userRepo.GetByPhoneKey(ctx, phoneKey)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return errors.New("no account found for this phone number")
+			return ErrAccountNotFound
 		}
 		return err
 	}
@@ -740,7 +744,7 @@ func (s *authService) LoginWithPhoneOTP(ctx context.Context, phoneRaw, otpCode s
 	user, err := s.userRepo.GetByPhoneKey(ctx, phoneKey)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return nil, "", errors.New("no account found for this phone number")
+			return nil, "", ErrAccountNotFound
 		}
 		return nil, "", err
 	}

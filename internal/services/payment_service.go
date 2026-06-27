@@ -24,6 +24,10 @@ type PaymentService interface {
 	HandleWebhook(ctx context.Context, gateway string, payload []byte, signature string) error
 	RefundPayment(ctx context.Context, transactionID primitive.ObjectID, amount *float64) error
 	GetTransaction(ctx context.Context, requesterID primitive.ObjectID, requesterRole string, id primitive.ObjectID) (*models.PaymentTransaction, error)
+	// SetPaidNotifier registers a callback fired once an order's online payment is
+	// confirmed (synchronous /payments/process or Stripe webhook). Used by OrderService
+	// to send the "Order Confirmed" notifications at the right time, not at checkout.
+	SetPaidNotifier(fn func(ctx context.Context, orderID primitive.ObjectID))
 }
 
 type PaymentIntent struct {
@@ -43,6 +47,11 @@ type paymentService struct {
 	stripeWebhookEvents repositories.StripeWebhookEventRepository // optional
 	stripeKey           string
 	stripeWebhookSecret string
+	paidNotifier        func(ctx context.Context, orderID primitive.ObjectID) // optional; set via SetPaidNotifier
+}
+
+func (s *paymentService) SetPaidNotifier(fn func(ctx context.Context, orderID primitive.ObjectID)) {
+	s.paidNotifier = fn
 }
 
 func NewPaymentService(
@@ -221,19 +230,31 @@ func (s *paymentService) ProcessPayment(ctx context.Context, requesterID primiti
 		if s.stripeKey == "" {
 			return errors.New("Stripe is not configured: set STRIPE_SECRET_KEY")
 		}
-		if !strings.HasPrefix(paymentMethodID, "pm_") {
-			return errors.New("invalid payment method: use Stripe Elements to pay with card (card details must not be sent to the server)")
-		}
 		stripe.Key = s.stripeKey
-		params := &stripe.PaymentIntentConfirmParams{
-			PaymentMethod: stripe.String(paymentMethodID),
-		}
 		_ = ctx
-		_, err = paymentintent.Confirm(paymentIntentID, params)
-		if err != nil {
-			reason := err.Error()
-			s.paymentRepo.UpdateStatus(ctx, transaction.ID, "failed", &reason)
-			return err
+		if strings.HasPrefix(paymentMethodID, "pm_") {
+			// Web (Stripe Elements) flow: confirm the intent server-side with the
+			// client-tokenized payment method.
+			params := &stripe.PaymentIntentConfirmParams{
+				PaymentMethod: stripe.String(paymentMethodID),
+			}
+			if _, err = paymentintent.Confirm(paymentIntentID, params); err != nil {
+				reason := err.Error()
+				s.paymentRepo.UpdateStatus(ctx, transaction.ID, "failed", &reason)
+				return err
+			}
+		} else {
+			// Mobile (PaymentSheet) flow: the intent was already confirmed on-device.
+			// Verify with Stripe that it actually succeeded — never trust the client.
+			pi, getErr := paymentintent.Get(paymentIntentID, nil)
+			if getErr != nil {
+				return getErr
+			}
+			if pi.Status != stripe.PaymentIntentStatusSucceeded {
+				reason := fmt.Sprintf("payment not completed (status=%s)", pi.Status)
+				s.paymentRepo.UpdateStatus(ctx, transaction.ID, "failed", &reason)
+				return errors.New(reason)
+			}
 		}
 		s.paymentRepo.UpdateStatus(ctx, transaction.ID, "success", nil)
 		_ = s.markOrderPaidAfterGatewaySuccess(ctx, transaction.OrderID)
@@ -265,7 +286,15 @@ func (s *paymentService) markOrderPaidAfterGatewaySuccess(ctx context.Context, o
 	}
 	order.PaymentStatus = "paid"
 	order.Status = "processing"
-	return s.orderRepo.Update(ctx, order.ID, order)
+	if err := s.orderRepo.Update(ctx, order.ID, order); err != nil {
+		return err
+	}
+	// Payment is now confirmed — this is the right moment to tell the customer their
+	// order is confirmed (not at checkout, before they paid).
+	if s.paidNotifier != nil {
+		go s.paidNotifier(context.Background(), order.ID)
+	}
+	return nil
 }
 
 func (s *paymentService) HandleWebhook(ctx context.Context, gateway string, payload []byte, signature string) error {

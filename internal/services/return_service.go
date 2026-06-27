@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"rloco-backend/internal/models"
 	"rloco-backend/internal/repositories"
 )
+
+// returnWindowDays is how long after delivery a customer may request a return.
+// Measured from the order's UpdatedAt, which is set when the order transitions to
+// "delivered" (no dedicated delivered-at timestamp exists on the order yet).
+const returnWindowDays = 30
 
 type ReturnService interface {
 	Create(ctx context.Context, orderID, userID primitive.ObjectID, items []models.ReturnItem, reason, description string) (*models.Return, error)
@@ -55,9 +61,14 @@ func (s *returnService) Create(ctx context.Context, orderID, userID primitive.Ob
 		return nil, errors.New("order does not belong to user")
 	}
 
-	// Check if order is eligible for return (not cancelled, delivered, etc.)
-	if order.Status == "cancelled" {
-		return nil, errors.New("cancelled orders cannot be returned")
+	// Returns are only valid for delivered orders, within the return window. (The UI
+	// already gates on "delivered"; enforce it server-side so a direct API call can't
+	// return a pending/shipped/cancelled order.)
+	if order.Status != "delivered" {
+		return nil, errors.New("only delivered orders can be returned")
+	}
+	if time.Since(order.UpdatedAt) > returnWindowDays*24*time.Hour {
+		return nil, fmt.Errorf("the %d-day return window for this order has passed", returnWindowDays)
 	}
 
 	// Calculate refund amount; validate return quantities do not exceed ordered quantities
@@ -159,19 +170,9 @@ func (s *returnService) Approve(ctx context.Context, id primitive.ObjectID) erro
 		return errors.New("return request is not in requested status")
 	}
 
-	// Restore stock
-	for _, item := range returnReq.Items {
-		product, err := s.productRepo.GetByID(ctx, item.ProductID)
-		if err == nil {
-			if product.Stock == nil {
-				product.Stock = make(map[string]int)
-			}
-			product.Stock[item.Size] += item.Quantity
-			s.productRepo.Update(ctx, product.ID, product)
-		}
-	}
-
-	// Update status
+	// Note: stock is NOT restored here. Approval only authorizes the return; inventory
+	// is credited when the refund is processed (i.e. once the item has been received),
+	// so an approved-but-never-shipped-back return doesn't inflate available stock.
 	return s.returnRepo.UpdateStatus(ctx, id, "approved")
 }
 
@@ -220,7 +221,32 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 		if err := s.paymentService.RefundPayment(ctx, transaction.ID, &amount); err != nil {
 			return fmt.Errorf("gateway refund failed: %w", err)
 		}
-		_ = s.orderRepo.UpdatePaymentStatus(ctx, returnReq.OrderID, "refunded")
+	}
+
+	// Restore stock now that the return is finalized (item received & refund issued).
+	for _, item := range returnReq.Items {
+		_ = s.productRepo.AtomicStockIncrement(ctx, item.ProductID, item.Size, item.Quantity)
+	}
+
+	// Determine whether the order is now fully or partially refunded. A partial return
+	// (e.g. 1 of 3 items) must NOT mark the whole order "refunded"/"returned". Sum the
+	// refund amounts of all completed returns for this order plus this one.
+	refundedTotal := returnReq.RefundAmount
+	if existing, gerr := s.returnRepo.GetByOrderID(ctx, returnReq.OrderID); gerr == nil {
+		for _, r := range existing {
+			if r.ID != returnReq.ID && r.Status == "completed" {
+				refundedTotal += r.RefundAmount
+			}
+		}
+	}
+	fullyRefunded := orderForRefund.Total > 0 && refundedTotal >= orderForRefund.Total-0.01
+
+	if !isCODPaymentMethod(orderForRefund.PaymentMethod) {
+		if fullyRefunded {
+			_ = s.orderRepo.UpdatePaymentStatus(ctx, returnReq.OrderID, "refunded")
+		} else {
+			_ = s.orderRepo.UpdatePaymentStatus(ctx, returnReq.OrderID, "partially_refunded")
+		}
 	}
 
 	// Update refund method and status
@@ -232,11 +258,11 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 		return err
 	}
 
-	// Reflect the refund back onto the parent order so it no longer reads as
-	// "delivered"/"shipped" once the items have been returned and refunded. Only the
+	// Reflect a FULL refund back onto the parent order so it reads as "returned". A
+	// partial return leaves the order in its delivered/shipped state. Only the
 	// post-fulfillment states can transition to "returned"; guard here because this
 	// uses the raw repository (the return service has no OrderService dependency).
-	if orderForRefund.Status == "shipped" || orderForRefund.Status == "delivered" {
+	if fullyRefunded && (orderForRefund.Status == "shipped" || orderForRefund.Status == "delivered") {
 		_ = s.orderRepo.UpdateStatus(ctx, returnReq.OrderID, "returned")
 	}
 
@@ -254,16 +280,38 @@ func (s *returnService) ProcessRefund(ctx context.Context, id primitive.ObjectID
 	return nil
 }
 
+// allowedReturnTransitions is the legal return-status state machine for the generic
+// admin status setter. The richer Approve/Reject/ProcessRefund paths carry their own
+// side effects; this guards manual overrides from skipping straight to "completed"
+// (which would mark a return done without a refund ever being issued).
+var allowedReturnTransitions = map[string][]string{
+	"requested":  {"approved", "rejected"},
+	"approved":   {"processing", "completed"},
+	"processing": {"completed"},
+	"rejected":   {},
+	"completed":  {},
+}
+
 func (s *returnService) UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error {
-	validStatuses := map[string]bool{
-		"requested":  true,
-		"approved":   true,
-		"rejected":   true,
-		"processing": true,
-		"completed": true,
-	}
-	if !validStatuses[status] {
+	if _, known := allowedReturnTransitions[status]; !known {
 		return errors.New("invalid status")
+	}
+	current, err := s.returnRepo.GetByID(ctx, id)
+	if err != nil {
+		return errors.New("return request not found")
+	}
+	if status == current.Status {
+		return nil
+	}
+	valid := false
+	for _, next := range allowedReturnTransitions[current.Status] {
+		if next == status {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("illegal return status transition: %q -> %q", current.Status, status)
 	}
 	return s.returnRepo.UpdateStatus(ctx, id, status)
 }

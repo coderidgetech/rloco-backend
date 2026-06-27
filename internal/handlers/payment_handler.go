@@ -94,7 +94,9 @@ func (h *PaymentHandler) CreatePaymentIntent(c *gin.Context) {
 func (h *PaymentHandler) ProcessPayment(c *gin.Context) {
 	var req struct {
 		PaymentIntentID string `json:"payment_intent_id" binding:"required"`
-		PaymentMethodID string `json:"payment_method_id" binding:"required"`
+		// Optional: web (Stripe Elements) sends a pm_… id to confirm server-side;
+		// mobile (PaymentSheet) confirms on-device and omits it (verify-only path).
+		PaymentMethodID string `json:"payment_method_id"`
 		Gateway         string `json:"gateway" binding:"required"`
 	}
 

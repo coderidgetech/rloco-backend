@@ -127,6 +127,9 @@ func main() {
 	paymentService := services.NewPaymentService(paymentRepo, orderRepo, emailService, stripeWebhookEventRepo, cfg.StripeSecretKey, cfg.StripeWebhookSecret)
 	// Allow the order service to refund paid orders that are cancelled.
 	orderService.AttachRefunder(paymentRepo, paymentService)
+	// Fire "Order Confirmed" notifications when an online payment is confirmed,
+	// not at checkout (avoids a premature confirmation push before payment).
+	paymentService.SetPaidNotifier(orderService.NotifyOrderConfirmed)
 	returnService := services.NewReturnService(returnRepo, orderRepo, productRepo, paymentRepo, paymentService, emailService)
 	videoService := services.NewVideoService(videoRepo)
 	addressService := services.NewAddressService(addressRepo)

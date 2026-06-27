@@ -149,8 +149,17 @@ func (r *userRepository) List(ctx context.Context, limit, skip int) ([]*models.U
 }
 
 // AddFCMToken adds a device token to the user's fcm_tokens list (max 5, deduplicating).
+// Done in two steps because Mongo can't $pull and $push the same field in one update:
+// first remove any existing copy of this token, then push it to the front (keeping 5).
+// Without the $pull, re-registering the same token on every app launch would store
+// duplicates and the user would receive each push multiple times.
 func (r *userRepository) AddFCMToken(ctx context.Context, userID primitive.ObjectID, token string) error {
-	// $addToSet prevents duplicates; slice trimming to 5 is handled via $push with $slice
+	if _, err := r.collection.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$pull": bson.M{"fcm_tokens": token}},
+	); err != nil {
+		return err
+	}
 	_, err := r.collection.UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{

@@ -87,6 +87,7 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 				{"sku": bson.M{"$regex": re}},
 				{"category": bson.M{"$regex": re}},
 				{"subcategory": bson.M{"$regex": re}},
+				{"gender": bson.M{"$regex": re}},
 				{"description": bson.M{"$regex": re}},
 				{"material": bson.M{"$regex": re}},
 			}

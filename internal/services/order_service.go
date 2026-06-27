@@ -37,6 +37,9 @@ type OrderService interface {
 	// AttachRefunder wires the payment collaborators used to refund paid orders on
 	// cancellation. Optional: when unset, cancelling a paid order skips the gateway refund.
 	AttachRefunder(paymentRepo repositories.PaymentRepository, paymentService PaymentService)
+	// NotifyOrderConfirmed sends the "order confirmed" notifications for an online-payment
+	// order once its payment is confirmed. Wired into PaymentService via SetPaidNotifier.
+	NotifyOrderConfirmed(ctx context.Context, orderID primitive.ObjectID)
 }
 
 // OrderCheckoutPricing holds env-driven defaults for order totals (see config.Config ORDER_* vars).
@@ -377,20 +380,14 @@ func (s *orderService) Create(ctx context.Context, userID primitive.ObjectID, it
 	// Non-COD: order stays status=pending, payment_status=pending until Stripe webhook or /payments/process.
 	// COD: same defaults; ops may mark paid on delivery via admin flows.
 
-	// Send order confirmation notifications (async)
-	go func() {
-		_ = s.emailService.SendOrderConfirmation(order.ShippingInfo.Email, order)
-		totalDisplay := fmt.Sprintf("$%.2f", order.Total)
-		_ = s.emailService.SendNewOrderAlert(order.OrderNumber, totalDisplay, order.ShippingInfo.Email)
-		if s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
-			_ = s.smsService.SendOrderConfirmation(context.Background(), order.ShippingInfo.Phone, order.OrderNumber)
-		}
-		if s.fcmService != nil && s.fcmService.Enabled() && s.userRepo != nil {
-			if u, err := s.userRepo.GetByID(context.Background(), order.UserID); err == nil && len(u.FCMTokens) > 0 {
-				_ = s.fcmService.SendToTokens(context.Background(), u.FCMTokens, "Order Confirmed", "Your order "+order.OrderNumber+" has been confirmed!", map[string]string{"order_id": order.ID.Hex()})
-			}
-		}
-	}()
+	// Order-confirmation notifications (async). COD orders are confirmed the moment
+	// they're placed, so notify now. Online-payment orders are still unpaid/pending
+	// here — sending "Order Confirmed" before the customer has paid (and while the
+	// order can still be swept as abandoned) is wrong. Those fire from
+	// NotifyOrderConfirmed once the gateway confirms the payment.
+	if isCODPaymentMethod(paymentMethod) {
+		go s.sendOrderConfirmedNotifications(order)
+	}
 
 	// Credit earned reward points (1 pt per $1 of order total, async)
 	go func() {
@@ -584,6 +581,15 @@ func (s *orderService) UpdateStatus(ctx context.Context, id primitive.ObjectID, 
 	if status == oldStatus {
 		return nil
 	}
+
+	// Cancelling must run the full cancellation side effects (gateway refund, stock
+	// restore, reward reversal) — not just a status flip — otherwise an admin
+	// cancelling a paid order would leave the customer charged. Route it through the
+	// shared path, which sends its own notifications.
+	if status == "cancelled" {
+		return s.performCancellation(ctx, order, "Cancelled by admin", "Order cancelled by admin")
+	}
+
 	if err := s.orderRepo.UpdateStatus(ctx, id, status); err != nil {
 		return err
 	}
@@ -691,6 +697,33 @@ func (s *orderService) AttachRefunder(paymentRepo repositories.PaymentRepository
 	s.paymentService = paymentService
 }
 
+// sendOrderConfirmedNotifications sends the order-confirmation email/SMS/push for an
+// order whose placement is finalized — COD at creation, online orders once paid.
+func (s *orderService) sendOrderConfirmedNotifications(order *models.Order) {
+	_ = s.emailService.SendOrderConfirmation(order.ShippingInfo.Email, order)
+	totalDisplay := fmt.Sprintf("$%.2f", order.Total)
+	_ = s.emailService.SendNewOrderAlert(order.OrderNumber, totalDisplay, order.ShippingInfo.Email)
+	if s.smsService != nil && s.smsService.Enabled() && order.ShippingInfo.Phone != "" {
+		_ = s.smsService.SendOrderConfirmation(context.Background(), order.ShippingInfo.Phone, order.OrderNumber)
+	}
+	if s.fcmService != nil && s.fcmService.Enabled() && s.userRepo != nil {
+		if u, err := s.userRepo.GetByID(context.Background(), order.UserID); err == nil && len(u.FCMTokens) > 0 {
+			_ = s.fcmService.SendToTokens(context.Background(), u.FCMTokens, "Order Confirmed", "Your order "+order.OrderNumber+" has been confirmed!", map[string]string{"order_id": order.ID.Hex()})
+		}
+	}
+}
+
+// NotifyOrderConfirmed loads the order and fires its confirmation notifications.
+// Called by PaymentService once an online payment is confirmed (see SetPaidNotifier),
+// so the "Order Confirmed" push/email is not sent at checkout before payment succeeds.
+func (s *orderService) NotifyOrderConfirmed(ctx context.Context, orderID primitive.ObjectID) {
+	order, err := s.orderRepo.GetByID(ctx, orderID)
+	if err != nil {
+		return
+	}
+	s.sendOrderConfirmedNotifications(order)
+}
+
 func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID primitive.ObjectID, reason string) error {
 	order, err := s.orderRepo.GetByID(ctx, id)
 	if err != nil {
@@ -701,6 +734,17 @@ func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID
 	if order.UserID != userID {
 		return errors.New("unauthorized: you can only cancel your own orders")
 	}
+
+	return s.performCancellation(ctx, order, reason, "Order cancelled by customer")
+}
+
+// performCancellation runs all cancellation side effects — stock restore, gateway
+// refund of paid non-COD orders, reward-point reversal, status->cancelled, tracking,
+// and customer notification. The caller is responsible for authorization. Used by
+// both the customer Cancel path and the admin status-update path so neither can
+// cancel an order without also refunding/restocking it.
+func (s *orderService) performCancellation(ctx context.Context, order *models.Order, reason, actorDescription string) error {
+	id := order.ID
 
 	// Check if order can be cancelled
 	if order.Status == "cancelled" {
@@ -765,11 +809,16 @@ func (s *orderService) Cancel(ctx context.Context, id primitive.ObjectID, userID
 	}
 
 	// Add tracking update
-	_ = s.AddTrackingUpdate(ctx, id, "cancelled", "System", "Order cancelled by customer. Reason: "+reason, nil)
+	_ = s.AddTrackingUpdate(ctx, id, "cancelled", "System", actorDescription+". Reason: "+reason, nil)
 
-	// Send email notification
+	// Notify the customer (email + push)
 	go func() {
 		_ = s.emailService.SendOrderStatusUpdate(order.ShippingInfo.Email, order, "cancelled")
+		if s.fcmService != nil && s.fcmService.Enabled() && s.userRepo != nil {
+			if u, err := s.userRepo.GetByID(context.Background(), order.UserID); err == nil && len(u.FCMTokens) > 0 {
+				_ = s.fcmService.SendToTokens(context.Background(), u.FCMTokens, "Order Cancelled", "Order "+order.OrderNumber, map[string]string{"order_id": order.ID.Hex(), "status": "cancelled"})
+			}
+		}
 	}()
 
 	return nil
