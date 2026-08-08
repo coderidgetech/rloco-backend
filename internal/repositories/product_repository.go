@@ -22,7 +22,6 @@ type ProductRepository interface {
 	GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error)
 	GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error)
 	GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error)
-	Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error)
 	// AtomicStockUpdate atomically decrements stock if available
 	AtomicStockUpdate(ctx context.Context, productID primitive.ObjectID, size string, quantity int) error
 	// AtomicStockIncrement restores stock (e.g. order cancellation)
@@ -241,23 +240,6 @@ func (r *productRepository) GetOnSale(ctx context.Context, limit int, market str
 		return nil, err
 	}
 	return products, nil
-}
-
-func (r *productRepository) Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error) {
-	filter := bson.M{
-		"status": bson.M{"$ne": "draft"},
-		"$or": []bson.M{
-			{"name": bson.M{"$regex": query, "$options": "i"}},
-			{"sku": bson.M{"$regex": query, "$options": "i"}},
-			{"description": bson.M{"$regex": query, "$options": "i"}},
-			{"category": bson.M{"$regex": query, "$options": "i"}},
-			{"subcategory": bson.M{"$regex": query, "$options": "i"}},
-			{"material": bson.M{"$regex": query, "$options": "i"}},
-		},
-	}
-	filter = MergeMarketFilter(filter, market)
-
-	return r.List(ctx, filter, limit, skip, bson.M{"created_at": -1})
 }
 
 // AtomicStockUpdate atomically decrements stock if available, preventing race conditions

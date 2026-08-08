@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 
@@ -21,7 +20,6 @@ type ProductService interface {
 	GetFeatured(ctx context.Context, limit int, market string) ([]*models.Product, error)
 	GetNewArrivals(ctx context.Context, limit int, market string) ([]*models.Product, error)
 	GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error)
-	Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error)
 	// Variant group methods
 	GetVariants(ctx context.Context, productID primitive.ObjectID) ([]*models.Product, error)
 	SetVariantGroup(ctx context.Context, productID primitive.ObjectID, groupID primitive.ObjectID, color string, isMain bool) error
@@ -82,14 +80,20 @@ func (s *productService) List(ctx context.Context, filter map[string]interface{}
 		if search, ok := filter["search"].(string); ok && search != "" {
 			pattern := ".*" + regexp.QuoteMeta(search) + ".*"
 			re := primitive.Regex{Pattern: pattern, Options: "i"}
+			// `gender` is matched EXACTLY (anchored), unlike the substring match used for
+			// text fields. Substring matching on gender is broken: "men" is contained in
+			// "women", so searching "Men" would return every women's product too. Exact
+			// match means "Women" → women only, "Men" → men only, while still letting a
+			// user search a gender word and get that catalog.
+			genderRe := primitive.Regex{Pattern: "^" + regexp.QuoteMeta(search) + "$", Options: "i"}
 			bsonFilter["$or"] = []bson.M{
 				{"name": bson.M{"$regex": re}},
 				{"sku": bson.M{"$regex": re}},
 				{"category": bson.M{"$regex": re}},
 				{"subcategory": bson.M{"$regex": re}},
-				{"gender": bson.M{"$regex": re}},
 				{"description": bson.M{"$regex": re}},
 				{"material": bson.M{"$regex": re}},
+				{"gender": bson.M{"$regex": genderRe}},
 			}
 		}
 		if minPrice, ok := filter["min_price"].(float64); ok {
@@ -160,13 +164,6 @@ func (s *productService) GetNewArrivals(ctx context.Context, limit int, market s
 
 func (s *productService) GetOnSale(ctx context.Context, limit int, market string) ([]*models.Product, error) {
 	return s.repo.GetOnSale(ctx, limit, market)
-}
-
-func (s *productService) Search(ctx context.Context, query string, limit, skip int, market string) ([]*models.Product, int64, error) {
-	if query == "" {
-		return nil, 0, errors.New("search query cannot be empty")
-	}
-	return s.repo.Search(ctx, query, limit, skip, market)
 }
 
 func (s *productService) GetVariants(ctx context.Context, productID primitive.ObjectID) ([]*models.Product, error) {
