@@ -355,6 +355,7 @@ func main() {
 			reviews.PUT("/:reviewId", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.Update)
 			reviews.DELETE("/:reviewId", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.Delete)
 			reviews.POST("/:reviewId/helpful", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.MarkHelpful)
+			reviews.POST("/:reviewId/report", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), reviewHandler.ReportReview)
 		}
 
 		// Support

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"rloco-backend/internal/models"
@@ -16,7 +17,12 @@ type ReviewService interface {
 	Update(ctx context.Context, id, userID primitive.ObjectID, title, comment string, images []string) (*models.ProductReview, error)
 	Delete(ctx context.Context, id, userID primitive.ObjectID) error
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
-	IncrementHelpful(ctx context.Context, id primitive.ObjectID) error
+	IncrementHelpful(ctx context.Context, id, userID primitive.ObjectID) (bool, error)
+	// ReportReview records userID's report against a review; once
+	// reportThreshold distinct reports land, an approved review is pulled
+	// back to "pending" for admin re-review. Returns false (no error) if
+	// userID already reported this review.
+	ReportReview(ctx context.Context, id, userID primitive.ObjectID) (bool, error)
 	RecalculateProductRating(ctx context.Context, productID primitive.ObjectID) error
 	ListByStatus(ctx context.Context, status string, limit, skip int) ([]*models.ProductReview, int64, error)
 }
@@ -45,14 +51,34 @@ func (s *reviewService) Create(ctx context.Context, productID, userID primitive.
 		return nil, errors.New("product not found")
 	}
 
-	// Check if user already reviewed this product
+	// Check if user already reviewed this product, and count this user's
+	// very recent reviews for the fraud-velocity check below.
 	existingReviews, _, err := s.reviewRepo.GetByUserID(ctx, userID, 100, 0)
+	recentCount := 0
 	if err == nil {
+		cutoff := time.Now().Add(-fraudVelocityWindow)
 		for _, review := range existingReviews {
 			if review.ProductID.Hex() == productID.Hex() {
 				return nil, errors.New("you have already reviewed this product")
 			}
+			if review.CreatedAt.After(cutoff) {
+				recentCount++
+			}
 		}
+	}
+
+	// Obvious spam/profanity never gets published — reject at submission
+	// rather than queuing it for a human to look at.
+	if isFlaggedContent(title, comment) {
+		return nil, errors.New("your review contains content that isn't allowed; please revise and resubmit")
+	}
+
+	// Auto-approve by default (matches Myntra/Amazon/Flipkart-style instant
+	// publish); a burst of reviews from the same account in a short window
+	// looks bot-like, so hold those for manual approval instead.
+	status := "approved"
+	if recentCount >= fraudVelocityLimit-1 {
+		status = "pending"
 	}
 
 	review := &models.ProductReview{
@@ -65,11 +91,17 @@ func (s *reviewService) Create(ctx context.Context, productID, userID primitive.
 		Images:    images,
 		Verified:  false, // set only server-side when tied to a verified purchase
 		Helpful:   0,
-		Status:    "pending",
+		Status:    status,
 	}
 
 	if err := s.reviewRepo.Create(ctx, review); err != nil {
 		return nil, err
+	}
+
+	if status == "approved" {
+		if err := s.RecalculateProductRating(ctx, productID); err != nil {
+			return nil, err
+		}
 	}
 
 	return review, nil
@@ -94,9 +126,10 @@ func (s *reviewService) Update(ctx context.Context, id, userID primitive.ObjectI
 		return nil, errors.New("you can only update your own reviews")
 	}
 
-	// Check if review is approved (can't edit approved reviews)
-	if review.Status == "approved" {
-		return nil, errors.New("cannot edit approved reviews")
+	// Re-run the content filter on the edit — an approved review stays
+	// approved, but editing spam/profanity past the filter isn't allowed.
+	if isFlaggedContent(title, comment) {
+		return nil, errors.New("your review contains content that isn't allowed; please revise and resubmit")
 	}
 
 	review.Title = title
@@ -155,8 +188,27 @@ func (s *reviewService) UpdateStatus(ctx context.Context, id primitive.ObjectID,
 	return nil
 }
 
-func (s *reviewService) IncrementHelpful(ctx context.Context, id primitive.ObjectID) error {
-	return s.reviewRepo.IncrementHelpful(ctx, id)
+func (s *reviewService) IncrementHelpful(ctx context.Context, id, userID primitive.ObjectID) (bool, error) {
+	return s.reviewRepo.IncrementHelpful(ctx, id, userID)
+}
+
+func (s *reviewService) ReportReview(ctx context.Context, id, userID primitive.ObjectID) (bool, error) {
+	reported, newCount, err := s.reviewRepo.ReportReview(ctx, id, userID)
+	if err != nil || !reported {
+		return reported, err
+	}
+
+	if newCount >= reportThreshold {
+		review, err := s.reviewRepo.GetByID(ctx, id)
+		if err == nil && review.Status == "approved" {
+			if err := s.reviewRepo.UpdateStatus(ctx, id, "pending"); err != nil {
+				return true, err
+			}
+			return true, s.RecalculateProductRating(ctx, review.ProductID)
+		}
+	}
+
+	return true, nil
 }
 
 func (s *reviewService) RecalculateProductRating(ctx context.Context, productID primitive.ObjectID) error {

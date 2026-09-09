@@ -669,9 +669,9 @@ func getDefaultConfig() map[string]interface{} {
 		},
 		"design": map[string]interface{}{
 			"colors": map[string]interface{}{
-				"primary":            "#B4770E",
-				"primaryLight":       "#D4970E",
-				"primaryDark":        "#8B5A0B",
+				"primary":            "#3E6C7A",
+				"primaryLight":       "#5E93A3",
+				"primaryDark":        "#2F5563",
 				"secondary":          "#000000",
 				"secondaryGray":      "#666666",
 				"secondaryLightGray": "#999999",

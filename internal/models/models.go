@@ -8,55 +8,55 @@ import (
 
 // User represents a user in the system
 type User struct {
-	ID           primitive.ObjectID  `bson:"_id" json:"id"`
-	Email        string              `bson:"email" json:"email"`
-	PasswordHash string              `bson:"password_hash" json:"-"`
-	Name         string              `bson:"name" json:"name"`
-	Role         string              `bson:"role" json:"role"` // "customer", "admin", "vendor"
-	VendorID     *primitive.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
-	Avatar       string              `bson:"avatar" json:"avatar"`
-	Phone        *string             `bson:"phone,omitempty" json:"phone,omitempty"`
-	PhoneKey     string              `bson:"phone_key,omitempty" json:"-"` // digits-only lookup key; not exposed in JSON
-	Birthday     *time.Time          `bson:"birthday,omitempty" json:"birthday,omitempty"`
-	City         string              `bson:"city,omitempty" json:"city,omitempty"`
-	Active       bool                `bson:"active" json:"active"` // User account status
-	EmailVerified bool               `bson:"email_verified" json:"email_verified"`
+	ID            primitive.ObjectID  `bson:"_id" json:"id"`
+	Email         string              `bson:"email" json:"email"`
+	PasswordHash  string              `bson:"password_hash" json:"-"`
+	Name          string              `bson:"name" json:"name"`
+	Role          string              `bson:"role" json:"role"` // "customer", "admin", "vendor"
+	VendorID      *primitive.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
+	Avatar        string              `bson:"avatar" json:"avatar"`
+	Phone         *string             `bson:"phone,omitempty" json:"phone,omitempty"`
+	PhoneKey      string              `bson:"phone_key,omitempty" json:"-"` // digits-only lookup key; not exposed in JSON
+	Birthday      *time.Time          `bson:"birthday,omitempty" json:"birthday,omitempty"`
+	City          string              `bson:"city,omitempty" json:"city,omitempty"`
+	Active        bool                `bson:"active" json:"active"` // User account status
+	EmailVerified bool                `bson:"email_verified" json:"email_verified"`
 	// MustResetPassword forces a vendor issued a temporary password to set a new one
 	// before performing any write. No bson omitempty so clearing it (false) persists.
-	MustResetPassword bool           `bson:"must_reset_password" json:"must_reset_password,omitempty"`
-	FCMTokens    []string            `bson:"fcm_tokens,omitempty" json:"-"` // Firebase Cloud Messaging device tokens (max 5)
-	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
-	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`
+	MustResetPassword bool      `bson:"must_reset_password" json:"must_reset_password,omitempty"`
+	FCMTokens         []string  `bson:"fcm_tokens,omitempty" json:"-"` // Firebase Cloud Messaging device tokens (max 5)
+	CreatedAt         time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt         time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 // Product represents a product in the catalog
 type Product struct {
-	ID               primitive.ObjectID  `bson:"_id" json:"id"`
-	Name             string              `bson:"name" json:"name"`
-	SKU              string              `bson:"sku" json:"sku"`
-	Price            float64             `bson:"price" json:"price"`
-	OriginalPrice    *float64            `bson:"original_price,omitempty" json:"original_price,omitempty"`
-	PriceINR         *float64            `bson:"price_inr,omitempty" json:"price_inr,omitempty"`
-	OriginalPriceINR *float64            `bson:"original_price_inr,omitempty" json:"original_price_inr,omitempty"`
-	Images           []string            `bson:"images" json:"images"`
-	Category         string              `bson:"category" json:"category"`
-	Subcategory      string              `bson:"subcategory" json:"subcategory"`
-	Gender           string              `bson:"gender" json:"gender"` // "women", "men", "unisex"
-	Colors           []string            `bson:"colors" json:"colors"`
-	Sizes            []string            `bson:"sizes" json:"sizes"`
-	Description      string              `bson:"description" json:"description"`
-	Details          []string            `bson:"details" json:"details"`
-	Material         string              `bson:"material" json:"material"`
-	Care             string              `bson:"care" json:"care"`
-	Featured         bool                `bson:"featured" json:"featured"`
-	NewArrival       bool                `bson:"new_arrival" json:"new_arrival"`
-	OnSale           bool                `bson:"on_sale" json:"on_sale"`
-	IsGift           bool                `bson:"is_gift" json:"is_gift"` // Gift-worthy product (show in Gift For Her/Him, allow gift wrap)
-	Rating           float64             `bson:"rating" json:"rating"`
-	Reviews          int                 `bson:"reviews" json:"reviews"`
-	Badge            *string             `bson:"badge,omitempty" json:"badge,omitempty"`
-	VideoURL         *string             `bson:"video_url,omitempty" json:"video_url,omitempty"`
-	Stock            map[string]int      `bson:"stock" json:"stock"` // size -> quantity
+	ID               primitive.ObjectID `bson:"_id" json:"id"`
+	Name             string             `bson:"name" json:"name"`
+	SKU              string             `bson:"sku" json:"sku"`
+	Price            float64            `bson:"price" json:"price"`
+	OriginalPrice    *float64           `bson:"original_price,omitempty" json:"original_price,omitempty"`
+	PriceINR         *float64           `bson:"price_inr,omitempty" json:"price_inr,omitempty"`
+	OriginalPriceINR *float64           `bson:"original_price_inr,omitempty" json:"original_price_inr,omitempty"`
+	Images           []string           `bson:"images" json:"images"`
+	Category         string             `bson:"category" json:"category"`
+	Subcategory      string             `bson:"subcategory" json:"subcategory"`
+	Gender           string             `bson:"gender" json:"gender"` // "women", "men", "unisex"
+	Colors           []string           `bson:"colors" json:"colors"`
+	Sizes            []string           `bson:"sizes" json:"sizes"`
+	Description      string             `bson:"description" json:"description"`
+	Details          []string           `bson:"details" json:"details"`
+	Material         string             `bson:"material" json:"material"`
+	Care             string             `bson:"care" json:"care"`
+	Featured         bool               `bson:"featured" json:"featured"`
+	NewArrival       bool               `bson:"new_arrival" json:"new_arrival"`
+	OnSale           bool               `bson:"on_sale" json:"on_sale"`
+	IsGift           bool               `bson:"is_gift" json:"is_gift"` // Gift-worthy product (show in Gift For Her/Him, allow gift wrap)
+	Rating           float64            `bson:"rating" json:"rating"`
+	Reviews          int                `bson:"reviews" json:"reviews"`
+	Badge            *string            `bson:"badge,omitempty" json:"badge,omitempty"`
+	VideoURL         *string            `bson:"video_url,omitempty" json:"video_url,omitempty"`
+	Stock            map[string]int     `bson:"stock" json:"stock"` // size -> quantity
 	// AvailableMarkets lists markets where the product is sold (e.g. "IN", "US").
 	AvailableMarkets []string            `bson:"available_markets,omitempty" json:"available_markets,omitempty"`
 	VendorID         *primitive.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
@@ -123,34 +123,34 @@ type Category struct {
 
 // Order represents an order
 type Order struct {
-	ID             primitive.ObjectID  `bson:"_id" json:"id"`
-	OrderNumber    string              `bson:"order_number" json:"order_number"`
-	UserID         primitive.ObjectID  `bson:"user_id" json:"user_id"`
-	GuestEmail     *string             `bson:"guest_email,omitempty" json:"guest_email,omitempty"`
-	GuestName      *string             `bson:"guest_name,omitempty" json:"guest_name,omitempty"`
-	Items          []OrderItem        `bson:"items" json:"items"`
-	ShippingInfo   ShippingInfo       `bson:"shipping_info" json:"shipping_info"`
-	PaymentInfo    PaymentInfo        `bson:"payment_info" json:"payment_info"`
-	Subtotal         float64            `bson:"subtotal" json:"subtotal"`
-	Discount         float64            `bson:"discount" json:"discount"`
-	ShippingCost     float64            `bson:"shipping_cost" json:"shipping_cost"`
+	ID                primitive.ObjectID `bson:"_id" json:"id"`
+	OrderNumber       string             `bson:"order_number" json:"order_number"`
+	UserID            primitive.ObjectID `bson:"user_id" json:"user_id"`
+	GuestEmail        *string            `bson:"guest_email,omitempty" json:"guest_email,omitempty"`
+	GuestName         *string            `bson:"guest_name,omitempty" json:"guest_name,omitempty"`
+	Items             []OrderItem        `bson:"items" json:"items"`
+	ShippingInfo      ShippingInfo       `bson:"shipping_info" json:"shipping_info"`
+	PaymentInfo       PaymentInfo        `bson:"payment_info" json:"payment_info"`
+	Subtotal          float64            `bson:"subtotal" json:"subtotal"`
+	Discount          float64            `bson:"discount" json:"discount"`
+	ShippingCost      float64            `bson:"shipping_cost" json:"shipping_cost"`
 	GiftPackingCharge float64            `bson:"gift_packing_charge" json:"gift_packing_charge"` // Sum of gift packing (e.g. 50 per gift item)
-	Tax              float64            `bson:"tax" json:"tax"`
-	Total            float64            `bson:"total" json:"total"`
-	Status         string             `bson:"status" json:"status"` // "pending", "processing", "shipped", "delivered", "cancelled", "returned"
-	PaymentMethod  string             `bson:"payment_method" json:"payment_method"`
-	PaymentStatus  string             `bson:"payment_status" json:"payment_status"` // "pending", "paid", "failed", "refunded"
-	TrackingNumber      *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
-	LabelURL            *string            `bson:"label_url,omitempty" json:"label_url,omitempty"`
+	Tax               float64            `bson:"tax" json:"tax"`
+	Total             float64            `bson:"total" json:"total"`
+	Status            string             `bson:"status" json:"status"` // "pending", "processing", "shipped", "delivered", "cancelled", "returned"
+	PaymentMethod     string             `bson:"payment_method" json:"payment_method"`
+	PaymentStatus     string             `bson:"payment_status" json:"payment_status"` // "pending", "paid", "failed", "refunded"
+	TrackingNumber    *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
+	LabelURL          *string            `bson:"label_url,omitempty" json:"label_url,omitempty"`
 	// Shipping selection captured at checkout so fulfillment buys the same rate the
 	// customer was charged for, at the order's real weight (not the cheapest available).
-	ShippingCarrier  string  `bson:"shipping_carrier,omitempty" json:"shipping_carrier,omitempty"`
-	ShippingService  string  `bson:"shipping_service,omitempty" json:"shipping_service,omitempty"`
-	ShippingWeightLb float64 `bson:"shipping_weight_lb,omitempty" json:"shipping_weight_lb,omitempty"`
-	PromotionCode       *string            `bson:"promotion_code,omitempty" json:"promotion_code,omitempty"`
-	RewardPointsApplied int64              `bson:"reward_points_applied,omitempty" json:"reward_points_applied,omitempty"`
-	CreatedAt           time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt           time.Time          `bson:"updated_at" json:"updated_at"`
+	ShippingCarrier     string    `bson:"shipping_carrier,omitempty" json:"shipping_carrier,omitempty"`
+	ShippingService     string    `bson:"shipping_service,omitempty" json:"shipping_service,omitempty"`
+	ShippingWeightLb    float64   `bson:"shipping_weight_lb,omitempty" json:"shipping_weight_lb,omitempty"`
+	PromotionCode       *string   `bson:"promotion_code,omitempty" json:"promotion_code,omitempty"`
+	RewardPointsApplied int64     `bson:"reward_points_applied,omitempty" json:"reward_points_applied,omitempty"`
+	CreatedAt           time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt           time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 // OrderItem represents an item in an order
@@ -276,9 +276,16 @@ type ProductReview struct {
 	Images    []string           `bson:"images,omitempty" json:"images,omitempty"`
 	Verified  bool               `bson:"verified" json:"verified"` // Verified purchase
 	Helpful   int                `bson:"helpful" json:"helpful"`   // Helpful votes
-	Status    string             `bson:"status" json:"status"`     // "pending", "approved", "rejected"
-	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+	// HelpfulBy tracks which users already voted, so a single user can't
+	// inflate the count by clicking "Helpful" more than once.
+	HelpfulBy []primitive.ObjectID `bson:"helpful_by,omitempty" json:"-"`
+	// ReportCount / ReportedBy: once ReportCount crosses the moderation
+	// threshold, an approved review is pulled back to "pending".
+	ReportCount int                  `bson:"report_count,omitempty" json:"-"`
+	ReportedBy  []primitive.ObjectID `bson:"reported_by,omitempty" json:"-"`
+	Status      string               `bson:"status" json:"status"` // "pending", "approved", "rejected"
+	CreatedAt   time.Time            `bson:"created_at" json:"created_at"`
+	UpdatedAt   time.Time            `bson:"updated_at" json:"updated_at"`
 }
 
 // Return represents a return/refund request
@@ -389,47 +396,47 @@ type TicketMessage struct {
 
 // InspirationVideo represents an inspiration video for the homepage
 type InspirationVideo struct {
-	ID          primitive.ObjectID  `bson:"_id" json:"id"`
-	Title       string             `bson:"title" json:"title"`
-	VideoURL    string             `bson:"video_url" json:"video_url"`
-	ThumbnailURL string             `bson:"thumbnail_url" json:"thumbnail_url"`
-	Category    string             `bson:"category" json:"category"`
-	Featured    bool               `bson:"featured" json:"featured"`
-	UploadedBy  *primitive.ObjectID `bson:"uploaded_by,omitempty" json:"uploaded_by,omitempty"`
-	UploadedByName string           `bson:"uploaded_by_name,omitempty" json:"uploaded_by_name,omitempty"`
-	IsActive    bool               `bson:"is_active" json:"is_active"`
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+	ID             primitive.ObjectID  `bson:"_id" json:"id"`
+	Title          string              `bson:"title" json:"title"`
+	VideoURL       string              `bson:"video_url" json:"video_url"`
+	ThumbnailURL   string              `bson:"thumbnail_url" json:"thumbnail_url"`
+	Category       string              `bson:"category" json:"category"`
+	Featured       bool                `bson:"featured" json:"featured"`
+	UploadedBy     *primitive.ObjectID `bson:"uploaded_by,omitempty" json:"uploaded_by,omitempty"`
+	UploadedByName string              `bson:"uploaded_by_name,omitempty" json:"uploaded_by_name,omitempty"`
+	IsActive       bool                `bson:"is_active" json:"is_active"`
+	CreatedAt      time.Time           `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
 // Address represents a saved user address
 type Address struct {
-	ID          primitive.ObjectID `bson:"_id" json:"id"`
-	UserID      primitive.ObjectID `bson:"user_id" json:"user_id"`
-	Name        string             `bson:"name" json:"name"`
-	Type        string             `bson:"type" json:"type"` // "HOME", "OFFICE", "OTHER"
-	AddressLine string             `bson:"address_line" json:"address_line"`
-	AddressLine2 string            `bson:"address_line2,omitempty" json:"address_line2,omitempty"`
-	City        string             `bson:"city" json:"city"`
-	State       string             `bson:"state" json:"state"`
-	Pincode     string             `bson:"pincode" json:"pincode"`
-	Mobile      string             `bson:"mobile" json:"mobile"`
-	Country     string             `bson:"country" json:"country"`
-	IsDefault   bool               `bson:"is_default" json:"is_default"`
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+	ID           primitive.ObjectID `bson:"_id" json:"id"`
+	UserID       primitive.ObjectID `bson:"user_id" json:"user_id"`
+	Name         string             `bson:"name" json:"name"`
+	Type         string             `bson:"type" json:"type"` // "HOME", "OFFICE", "OTHER"
+	AddressLine  string             `bson:"address_line" json:"address_line"`
+	AddressLine2 string             `bson:"address_line2,omitempty" json:"address_line2,omitempty"`
+	City         string             `bson:"city" json:"city"`
+	State        string             `bson:"state" json:"state"`
+	Pincode      string             `bson:"pincode" json:"pincode"`
+	Mobile       string             `bson:"mobile" json:"mobile"`
+	Country      string             `bson:"country" json:"country"`
+	IsDefault    bool               `bson:"is_default" json:"is_default"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt    time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 // OrderTrackingUpdate represents a tracking update for an order
 type OrderTrackingUpdate struct {
-	ID          primitive.ObjectID `bson:"_id" json:"id"`
-	OrderID     primitive.ObjectID `bson:"order_id" json:"order_id"`
-	Status      string             `bson:"status" json:"status"`
-	Date        time.Time          `bson:"date" json:"date"`
-	Location    string             `bson:"location" json:"location"`
-	Description string             `bson:"description" json:"description"`
-	TrackingNumber *string          `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
+	ID             primitive.ObjectID `bson:"_id" json:"id"`
+	OrderID        primitive.ObjectID `bson:"order_id" json:"order_id"`
+	Status         string             `bson:"status" json:"status"`
+	Date           time.Time          `bson:"date" json:"date"`
+	Location       string             `bson:"location" json:"location"`
+	Description    string             `bson:"description" json:"description"`
+	TrackingNumber *string            `bson:"tracking_number,omitempty" json:"tracking_number,omitempty"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
 }
 
 // PasswordResetToken represents a password reset token
@@ -489,10 +496,10 @@ type VendorApplication struct {
 	Country      string `bson:"country" json:"country"`
 
 	// Products
-	Category            string `bson:"category" json:"category"`
-	ProductDescription  string `bson:"product_description" json:"product_description"`
-	PriceRange          string `bson:"price_range" json:"price_range"`   // "0-500" | "500-2000" | "2000-10000" | "10000+"
-	EstimatedListings   string `bson:"estimated_listings" json:"estimated_listings"` // "1-10" | "10-50" | "50-100" | "100+"
+	Category           string `bson:"category" json:"category"`
+	ProductDescription string `bson:"product_description" json:"product_description"`
+	PriceRange         string `bson:"price_range" json:"price_range"`               // "0-500" | "500-2000" | "2000-10000" | "10000+"
+	EstimatedListings  string `bson:"estimated_listings" json:"estimated_listings"` // "1-10" | "10-50" | "50-100" | "100+"
 
 	// Extra
 	HowDidYouHear string `bson:"how_did_you_hear,omitempty" json:"how_did_you_hear,omitempty"`
@@ -510,9 +517,9 @@ type VendorApplication struct {
 type RewardsTransaction struct {
 	ID          primitive.ObjectID `bson:"_id" json:"id"`
 	UserID      primitive.ObjectID `bson:"user_id" json:"user_id"`
-	Type        string             `bson:"type" json:"type"`               // "earned" | "redeemed"
+	Type        string             `bson:"type" json:"type"` // "earned" | "redeemed"
 	Points      int64              `bson:"points" json:"points"`
-	Reference   string             `bson:"reference" json:"reference"`     // order number or manual label
+	Reference   string             `bson:"reference" json:"reference"` // order number or manual label
 	Description string             `bson:"description" json:"description"`
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 }

@@ -105,8 +105,17 @@ func (h *ReviewHandler) Create(c *gin.Context) {
 		return
 	}
 
-	userName, _ := c.Get("email")
-	userNameStr, _ := userName.(string)
+	userNameStr := ""
+	if u, ok := c.Get("user_obj"); ok {
+		if user, ok := u.(*models.User); ok {
+			userNameStr = user.Name
+		}
+	}
+	if userNameStr == "" {
+		if email, ok := c.Get("email"); ok {
+			userNameStr, _ = email.(string)
+		}
+	}
 
 	var req struct {
 		Rating   int      `json:"rating" binding:"required,min=1,max=5"`
@@ -176,7 +185,7 @@ func (h *ReviewHandler) GetByProduct(c *gin.Context) {
 }
 
 func (h *ReviewHandler) Update(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	id, err := primitive.ObjectIDFromHex(c.Param("reviewId"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid review ID"})
 		return
@@ -211,7 +220,7 @@ func (h *ReviewHandler) Update(c *gin.Context) {
 }
 
 func (h *ReviewHandler) Delete(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	id, err := primitive.ObjectIDFromHex(c.Param("reviewId"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid review ID"})
 		return
@@ -240,12 +249,53 @@ func (h *ReviewHandler) MarkHelpful(c *gin.Context) {
 		return
 	}
 
-	if err := h.reviewService.IncrementHelpful(c.Request.Context(), id); err != nil {
+	userID, _ := c.Get("user_id")
+	userIDStr, _ := userID.(string)
+	userIDObj, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	voted, err := h.reviewService.IncrementHelpful(c.Request.Context(), id, userIDObj)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !voted {
+		c.JSON(http.StatusOK, gin.H{"message": "You already marked this review as helpful"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Review marked as helpful"})
+}
+
+func (h *ReviewHandler) ReportReview(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("reviewId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid review ID"})
+		return
+	}
+
+	userID, _ := c.Get("user_id")
+	userIDStr, _ := userID.(string)
+	userIDObj, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	reported, err := h.reviewService.ReportReview(c.Request.Context(), id, userIDObj)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !reported {
+		c.JSON(http.StatusOK, gin.H{"message": "You already reported this review"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Thanks — this review has been reported for moderation"})
 }
 
 func (h *ReviewHandler) UpdateStatus(c *gin.Context) {

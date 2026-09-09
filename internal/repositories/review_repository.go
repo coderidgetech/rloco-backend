@@ -19,7 +19,13 @@ type ReviewRepository interface {
 	GetByUserID(ctx context.Context, userID primitive.ObjectID, limit, skip int) ([]*models.ProductReview, int64, error)
 	Update(ctx context.Context, id primitive.ObjectID, review *models.ProductReview) error
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
-	IncrementHelpful(ctx context.Context, id primitive.ObjectID) error
+	// IncrementHelpful records userID's vote and bumps the counter, unless
+	// userID already voted — returns false (no error) when it was a no-op.
+	IncrementHelpful(ctx context.Context, id, userID primitive.ObjectID) (bool, error)
+	// ReportReview records userID's report and bumps the report count,
+	// unless userID already reported this review. Returns the review's
+	// report count after the update (only meaningful when reported=true).
+	ReportReview(ctx context.Context, id, userID primitive.ObjectID) (reported bool, newCount int, err error)
 	GetProductRating(ctx context.Context, productID primitive.ObjectID) (float64, int, error)
 	Delete(ctx context.Context, id primitive.ObjectID) error
 	// ListByStatus lists reviews for admin moderation (empty status = all).
@@ -58,7 +64,7 @@ func (r *reviewRepository) GetByID(ctx context.Context, id primitive.ObjectID) (
 func (r *reviewRepository) GetByProductID(ctx context.Context, productID primitive.ObjectID, limit, skip int) ([]*models.ProductReview, int64, error) {
 	filter := bson.M{
 		"product_id": productID,
-		"status":      "approved", // Only show approved reviews
+		"status":     "approved", // Only show approved reviews
 	}
 
 	opts := options.Find().
@@ -135,13 +141,40 @@ func (r *reviewRepository) UpdateStatus(ctx context.Context, id primitive.Object
 	return err
 }
 
-func (r *reviewRepository) IncrementHelpful(ctx context.Context, id primitive.ObjectID) error {
-	_, err := r.collection.UpdateOne(
+func (r *reviewRepository) IncrementHelpful(ctx context.Context, id, userID primitive.ObjectID) (bool, error) {
+	result, err := r.collection.UpdateOne(
 		ctx,
-		bson.M{"_id": id},
-		bson.M{"$inc": bson.M{"helpful": 1}},
+		bson.M{"_id": id, "helpful_by": bson.M{"$ne": userID}},
+		bson.M{
+			"$inc":  bson.M{"helpful": 1},
+			"$push": bson.M{"helpful_by": userID},
+		},
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return result.ModifiedCount > 0, nil
+}
+
+func (r *reviewRepository) ReportReview(ctx context.Context, id, userID primitive.ObjectID) (bool, int, error) {
+	var updated models.ProductReview
+	err := r.collection.FindOneAndUpdate(
+		ctx,
+		bson.M{"_id": id, "reported_by": bson.M{"$ne": userID}},
+		bson.M{
+			"$inc":  bson.M{"report_count": 1},
+			"$push": bson.M{"reported_by": userID},
+		},
+		options.FindOneAndUpdate().SetReturnDocument(options.After),
+	).Decode(&updated)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			// Either the review doesn't exist, or userID already reported it.
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	return true, updated.ReportCount, nil
 }
 
 func (r *reviewRepository) GetProductRating(ctx context.Context, productID primitive.ObjectID) (float64, int, error) {
