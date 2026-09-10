@@ -15,6 +15,7 @@ type PasswordResetRepository interface {
 	GetByToken(ctx context.Context, token string) (*models.PasswordResetToken, error)
 	MarkAsUsed(ctx context.Context, tokenID primitive.ObjectID) error
 	DeleteExpired(ctx context.Context) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type passwordResetRepository struct {
@@ -58,5 +59,10 @@ func (r *passwordResetRepository) MarkAsUsed(ctx context.Context, tokenID primit
 
 func (r *passwordResetRepository) DeleteExpired(ctx context.Context) error {
 	_, err := r.collection.DeleteMany(ctx, bson.M{"expires_at": bson.M{"$lt": time.Now()}})
+	return err
+}
+
+func (r *passwordResetRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
 	return err
 }

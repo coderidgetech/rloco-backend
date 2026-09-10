@@ -15,6 +15,7 @@ type RewardsRepository interface {
 	AddTransaction(ctx context.Context, tx *models.RewardsTransaction) error
 	GetUserTransactions(ctx context.Context, userID primitive.ObjectID, limit, skip int) ([]models.RewardsTransaction, int64, error)
 	GetUserBalance(ctx context.Context, userID primitive.ObjectID) (int64, error)
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type rewardsRepository struct {
@@ -87,4 +88,9 @@ func (r *rewardsRepository) GetUserBalance(ctx context.Context, userID primitive
 		return 0, nil
 	}
 	return result[0].Balance, nil
+}
+
+func (r *rewardsRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
+	return err
 }

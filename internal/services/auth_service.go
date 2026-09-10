@@ -52,11 +52,12 @@ type authService struct {
 	passwordResetRepo     repositories.PasswordResetRepository
 	emailVerificationRepo repositories.EmailVerificationRepository
 	emailService          EmailService
-	otpRepo            repositories.PhoneOTPRepository
-	twilioVerify       *TwilioVerifyClient
-	secret             string
-	expiry             time.Duration
-	googleClientID string
+	otpRepo               repositories.PhoneOTPRepository
+	twilioVerify          *TwilioVerifyClient
+	secret                string
+	expiry                time.Duration
+	googleClientID        string
+	deletionRepos         *AccountDeletionRepos
 }
 
 type Claims struct {
@@ -76,6 +77,7 @@ func NewAuthService(
 	secret string,
 	expiryStr string,
 	googleClientID string,
+	deletionRepos *AccountDeletionRepos,
 ) AuthService {
 	expiry, _ := time.ParseDuration(expiryStr)
 	if expiry == 0 {
@@ -87,11 +89,12 @@ func NewAuthService(
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		emailService:          emailService,
-		otpRepo:            otpRepo,
-		twilioVerify:       twilioVerify,
-		secret:             secret,
-		expiry:             expiry,
-		googleClientID:     googleClientID,
+		otpRepo:               otpRepo,
+		twilioVerify:          twilioVerify,
+		secret:                secret,
+		expiry:                expiry,
+		googleClientID:        googleClientID,
+		deletionRepos:         deletionRepos,
 	}
 }
 
@@ -552,6 +555,17 @@ func (s *authService) DeleteAccount(ctx context.Context, userID string) error {
 	if err != nil {
 		return errors.New("invalid user ID")
 	}
+	// Fetched for the email (newsletter unsubscribe) — if the user is
+	// already gone there's nothing to cascade, so just no-op successfully.
+	user, err := s.userRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	if s.deletionRepos != nil {
+		s.deletionRepos.cascadeDeleteUserData(ctx, id, user.Email)
+	}
+	_ = s.passwordResetRepo.DeleteByUserID(ctx, id)
+	_ = s.emailVerificationRepo.DeleteByUserID(ctx, id)
 	return s.userRepo.Delete(ctx, id)
 }
 

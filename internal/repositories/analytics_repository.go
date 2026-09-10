@@ -15,6 +15,9 @@ type AnalyticsRepository interface {
 	GetEvents(ctx context.Context, filter bson.M, limit, skip int) ([]*models.AnalyticsEvent, int64, error)
 	GetPageViews(ctx context.Context, startDate, endDate time.Time) ([]map[string]interface{}, error)
 	GetConversionRate(ctx context.Context, startDate, endDate time.Time) (float64, error)
+	// AnonymizeByUserID strips the user link from past events on account
+	// deletion, keeping aggregate analytics intact without retaining PII.
+	AnonymizeByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type analyticsRepository struct {
@@ -32,6 +35,15 @@ func (r *analyticsRepository) CreateEvent(ctx context.Context, event *models.Ana
 	event.CreatedAt = time.Now()
 
 	_, err := r.collection.InsertOne(ctx, event)
+	return err
+}
+
+func (r *analyticsRepository) AnonymizeByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{"user_id": userID},
+		bson.M{"$unset": bson.M{"user_id": ""}},
+	)
 	return err
 }
 
@@ -127,4 +139,3 @@ func (r *analyticsRepository) GetConversionRate(ctx context.Context, startDate, 
 
 	return float64(purchases) / float64(pageViews) * 100, nil
 }
-

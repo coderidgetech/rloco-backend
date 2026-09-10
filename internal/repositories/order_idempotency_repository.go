@@ -17,6 +17,7 @@ type OrderIdempotencyRepository interface {
 	LookupOrderID(ctx context.Context, userID primitive.ObjectID, clientKey string) (*primitive.ObjectID, error)
 	Commit(ctx context.Context, userID primitive.ObjectID, clientKey string, orderID primitive.ObjectID) error
 	Release(ctx context.Context, userID primitive.ObjectID, clientKey string) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type orderIdempotencyRepository struct {
@@ -94,5 +95,10 @@ func (r *orderIdempotencyRepository) Release(ctx context.Context, userID primiti
 	}
 	id := idempotencyDocID(userID, clientKey)
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id, "user_id": userID, "order_id": nil})
+	return err
+}
+
+func (r *orderIdempotencyRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
 	return err
 }

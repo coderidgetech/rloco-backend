@@ -16,6 +16,7 @@ type CartRepository interface {
 	Create(ctx context.Context, cart *models.Cart) error
 	Update(ctx context.Context, cart *models.Cart) error
 	Clear(ctx context.Context, userID primitive.ObjectID) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type cartRepository struct {
@@ -82,3 +83,7 @@ func (r *cartRepository) Clear(ctx context.Context, userID primitive.ObjectID) e
 	return err
 }
 
+func (r *cartRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"user_id": userID})
+	return err
+}

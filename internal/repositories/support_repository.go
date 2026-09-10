@@ -20,6 +20,7 @@ type SupportRepository interface {
 	AddMessage(ctx context.Context, ticketID primitive.ObjectID, message *models.TicketMessage) error
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status string) error
 	Assign(ctx context.Context, id primitive.ObjectID, assignedTo primitive.ObjectID) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type supportRepository struct {
@@ -150,5 +151,10 @@ func (r *supportRepository) Assign(ctx context.Context, id primitive.ObjectID, a
 			"updated_at":  time.Now(),
 		}},
 	)
+	return err
+}
+
+func (r *supportRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
 	return err
 }

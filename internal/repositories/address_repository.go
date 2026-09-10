@@ -17,6 +17,7 @@ type AddressRepository interface {
 	GetByUserID(ctx context.Context, userID primitive.ObjectID) ([]*models.Address, error)
 	Update(ctx context.Context, id primitive.ObjectID, address *models.Address) error
 	Delete(ctx context.Context, id primitive.ObjectID) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 	SetDefault(ctx context.Context, userID primitive.ObjectID, addressID primitive.ObjectID) error
 }
 
@@ -123,6 +124,11 @@ func (r *addressRepository) Update(ctx context.Context, id primitive.ObjectID, a
 
 func (r *addressRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+func (r *addressRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
 	return err
 }
 

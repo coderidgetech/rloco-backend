@@ -14,6 +14,7 @@ type WishlistRepository interface {
 	GetByUserID(ctx context.Context, userID primitive.ObjectID) ([]*models.Wishlist, error)
 	Add(ctx context.Context, wishlist *models.Wishlist) error
 	Remove(ctx context.Context, userID, productID primitive.ObjectID) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 	IsInWishlist(ctx context.Context, userID, productID primitive.ObjectID) (bool, error)
 	GetProductWishlistCount(ctx context.Context, productID primitive.ObjectID) (int64, error)
 	GetUniqueUsersCount(ctx context.Context, productID primitive.ObjectID) (int64, error)
@@ -70,6 +71,11 @@ func (r *wishlistRepository) Remove(ctx context.Context, userID, productID primi
 		"user_id":    userID,
 		"product_id": productID,
 	})
+	return err
+}
+
+func (r *wishlistRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
 	return err
 }
 

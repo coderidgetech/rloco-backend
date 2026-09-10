@@ -87,6 +87,18 @@ func main() {
 		log.Printf("Warning: FCM disabled — %v", err)
 		fcmService, _ = services.NewFCMService("") // fall back to no-op
 	}
+	accountDeletionRepos := &services.AccountDeletionRepos{
+		AddressRepo:          addressRepo,
+		CartRepo:             cartRepo,
+		WishlistRepo:         wishlistRepo,
+		ReviewRepo:           reviewRepo,
+		ProductRepo:          productRepo,
+		RewardsRepo:          rewardsRepo,
+		SupportRepo:          supportRepo,
+		AnalyticsRepo:        analyticsRepo,
+		OrderIdempotencyRepo: orderIdempotencyRepo,
+		NewsletterRepo:       newsletterRepo,
+	}
 	authService := services.NewAuthService(
 		userRepo,
 		passwordResetRepo,
@@ -97,6 +109,7 @@ func main() {
 		cfg.JWTSecret,
 		cfg.JWTExpiry,
 		cfg.GoogleClientID,
+		accountDeletionRepos,
 	)
 	productService := services.NewProductService(productRepo)
 	categoryService := services.NewCategoryService(categoryRepo)

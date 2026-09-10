@@ -15,6 +15,7 @@ type EmailVerificationRepository interface {
 	GetByToken(ctx context.Context, token string) (*models.EmailVerificationToken, error)
 	MarkAsUsed(ctx context.Context, tokenID primitive.ObjectID) error
 	DeleteExpired(ctx context.Context) error
+	DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error
 }
 
 type emailVerificationRepository struct {
@@ -58,5 +59,10 @@ func (r *emailVerificationRepository) MarkAsUsed(ctx context.Context, tokenID pr
 
 func (r *emailVerificationRepository) DeleteExpired(ctx context.Context) error {
 	_, err := r.collection.DeleteMany(ctx, bson.M{"expires_at": bson.M{"$lt": time.Now()}})
+	return err
+}
+
+func (r *emailVerificationRepository) DeleteByUserID(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"user_id": userID})
 	return err
 }
