@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -663,4 +664,82 @@ func (h *OrderHandler) Fulfill(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, order)
+}
+
+// Invoice streams a branded PDF invoice for the order: full pricing
+// breakdown, address and payment status. Available to the order's owner and
+// to admins (mirrors the ownership check in Get).
+func (h *OrderHandler) Invoice(c *gin.Context) {
+	order, ok := h.loadOrderForOwnerOrAdmin(c)
+	if !ok {
+		return
+	}
+
+	company := companyInfoFromConfig(c.Request.Context(), h.configService)
+	pdfBytes, err := writeInvoicePDF(order, company)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate invoice"})
+		return
+	}
+
+	filename := fmt.Sprintf("invoice-%s.pdf", order.OrderNumber)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Data(http.StatusOK, "application/pdf", pdfBytes)
+}
+
+// PackingSlip streams a branded PDF packing slip for fulfillment: ship-to
+// address and line items only, no prices or payment data. The route is
+// admin-only (see route registration), matching Fulfill/UpdateStatus.
+func (h *OrderHandler) PackingSlip(c *gin.Context) {
+	orderID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+	order, err := h.orderService.GetByID(c.Request.Context(), orderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		return
+	}
+
+	company := companyInfoFromConfig(c.Request.Context(), h.configService)
+	pdfBytes, err := writePackingSlipPDF(order, company)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate packing slip"})
+		return
+	}
+
+	filename := fmt.Sprintf("packing-slip-%s.pdf", order.OrderNumber)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Data(http.StatusOK, "application/pdf", pdfBytes)
+}
+
+// loadOrderForOwnerOrAdmin fetches the order by :id and enforces that the
+// caller is either an admin or the order's own customer, writing the
+// appropriate error response and returning ok=false otherwise.
+func (h *OrderHandler) loadOrderForOwnerOrAdmin(c *gin.Context) (*models.Order, bool) {
+	orderID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return nil, false
+	}
+
+	order, err := h.orderService.GetByID(c.Request.Context(), orderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		return nil, false
+	}
+
+	role, _ := c.Get("role")
+	if role == "admin" {
+		return order, true
+	}
+
+	userIDStr, _ := c.Get("user_id")
+	userIDObj, err := primitive.ObjectIDFromHex(fmt.Sprint(userIDStr))
+	if err != nil || order.UserID.Hex() != userIDObj.Hex() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: You can only access your own orders"})
+		return nil, false
+	}
+	return order, true
 }

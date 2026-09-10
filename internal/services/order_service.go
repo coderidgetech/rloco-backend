@@ -578,20 +578,36 @@ func (s *orderService) UpdateStatus(ctx context.Context, id primitive.ObjectID, 
 	}
 
 	oldStatus := order.Status
-	if status == oldStatus {
-		return nil
-	}
+	sameStatus := status == oldStatus
 
 	// Cancelling must run the full cancellation side effects (gateway refund, stock
 	// restore, reward reversal) — not just a status flip — otherwise an admin
 	// cancelling a paid order would leave the customer charged. Route it through the
 	// shared path, which sends its own notifications.
-	if status == "cancelled" {
+	if status == "cancelled" && !sameStatus {
 		return s.performCancellation(ctx, order, "Cancelled by admin", "Order cancelled by admin")
 	}
 
-	if err := s.orderRepo.UpdateStatus(ctx, id, status); err != nil {
-		return err
+	if !sameStatus {
+		if err := s.orderRepo.UpdateStatus(ctx, id, status); err != nil {
+			return err
+		}
+	}
+
+	// COD settles on delivery, not at checkout — there's no gateway webhook to mark
+	// it paid, so treat a courier-confirmed delivery as proof of cash collection. This
+	// runs even when status is already "delivered" (sameStatus) so a retried carrier
+	// webhook or admin re-submit can retry a previously failed CAS instead of stranding
+	// the order at payment_status=pending forever. CAS guards against racing an
+	// admin/refund path that already changed payment_status.
+	if status == "delivered" && isCODPaymentMethod(order.PaymentMethod) && order.PaymentStatus != "paid" {
+		if _, err := s.orderRepo.CompareAndSwapPaymentStatus(ctx, id, order.PaymentStatus, "paid"); err != nil {
+			log.Printf("[ORDER][CRITICAL] failed to mark COD order %s paid on delivery: %v — needs manual reconciliation", order.ID.Hex(), err)
+		}
+	}
+
+	if sameStatus {
+		return nil
 	}
 
 	// Send notifications for status changes (async)

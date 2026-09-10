@@ -338,6 +338,8 @@ func main() {
 			orders.POST("/:id/return", returnHandler.Create)
 			orders.PUT("/:id/status", middleware.RequireRole("admin"), orderHandler.UpdateStatus)
 			orders.POST("/:id/fulfill", middleware.RequireRole("admin"), orderHandler.Fulfill)
+			orders.GET("/:id/invoice", orderHandler.Invoice)
+			orders.GET("/:id/packing-slip", middleware.RequireRole("admin"), orderHandler.PackingSlip)
 		}
 
 		// Returns
