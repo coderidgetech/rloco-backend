@@ -46,7 +46,9 @@ func (r *reviewRepository) Create(ctx context.Context, review *models.ProductRev
 	review.ID = primitive.NewObjectID()
 	review.CreatedAt = time.Now()
 	review.UpdatedAt = time.Now()
-	review.Status = "pending" // Default to pending for moderation
+	// Status is decided by the caller (reviewService.Create: auto-approved,
+	// or held for the content-filter/fraud-velocity checks) — do not
+	// override it here.
 
 	_, err := r.collection.InsertOne(ctx, review)
 	return err
