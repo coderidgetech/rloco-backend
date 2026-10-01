@@ -17,11 +17,12 @@ type rateLimiter struct {
 }
 
 type visitor struct {
-	count     int
+	count       int
 	windowStart time.Time // When the current window started
 }
 
 var limiter *rateLimiter
+var authLimiter *rateLimiter
 
 func init() {
 	limiter = &rateLimiter{
@@ -29,7 +30,13 @@ func init() {
 		rate:     1000, // overridden in main via ConfigureRateLimit(cfg.APIRateLimitRPM)
 		window:   1 * time.Minute,
 	}
+	authLimiter = &rateLimiter{
+		visitors: make(map[string]*visitor),
+		rate:     20,
+		window:   1 * time.Minute,
+	}
 	go limiter.cleanup()
+	go authLimiter.cleanup()
 }
 
 // ConfigureRateLimit sets per-IP requests per minute (from config.APIRateLimitRPM).
@@ -97,6 +104,21 @@ func RateLimit() gin.HandlerFunc {
 		if !limiter.allow(ip) {
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"error": "Rate limit exceeded. Please try again later.",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// AuthRateLimit applies a tighter per-IP limit to credential, OTP and recovery
+// exchanges. Per-phone resend and verification-attempt limits still apply too.
+func AuthRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !authLimiter.allow(c.ClientIP()) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": "Too many authentication attempts. Please try again later.",
 			})
 			c.Abort()
 			return

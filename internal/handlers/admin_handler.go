@@ -641,9 +641,9 @@ func getDefaultConfig() map[string]interface{} {
 			"supportEmail": "support@rloko.com",
 			"address":      "123 Fashion Avenue, New York, NY 10001, United States",
 			"socialMedia": map[string]interface{}{
-				"instagram": "@rloco",
+				"instagram": "@rloko",
 				"facebook":  "facebook.com/rloko",
-				"twitter":   "@rloco",
+				"twitter":   "@rloko",
 				"pinterest": "pinterest.com/rloko",
 			},
 			"currency":           "usd",
@@ -756,7 +756,7 @@ func getDefaultConfig() map[string]interface{} {
 				"port":      "587",
 				"username":  "apikey",
 				"password":  "",
-				"fromEmail": "noreply@rloco.com",
+				"fromEmail": "noreply@rloko.com",
 				"fromName":  "Rloko",
 			},
 			"sms": map[string]interface{}{
@@ -777,7 +777,7 @@ func getDefaultConfig() map[string]interface{} {
 				"title":        "Rloko - Modern Luxury Fashion",
 				"description":  "Shop curated luxury fashion at Rloko. Discover timeless pieces from the world's finest designers. Free shipping on orders over $100.",
 				"keywords":     "luxury fashion, designer clothing, high-end fashion, premium accessories",
-				"canonicalUrl": "https://rloco.com",
+				"canonicalUrl": "https://rloko.com",
 			},
 			"openGraph": map[string]interface{}{
 				"title":           "Rloko - Modern Luxury Fashion",

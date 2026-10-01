@@ -13,10 +13,10 @@ import (
 )
 
 type AuthHandler struct {
-	authService           services.AuthService
-	userRepo              repositories.UserRepository
-	googleClientID        string // Web OAuth client id (public); same as GOOGLE_CLIENT_ID on API
-	googleMapsBrowserKey  string // Maps JavaScript + Places (browser key; HTTP referrer–restricted in GCP)
+	authService          services.AuthService
+	userRepo             repositories.UserRepository
+	googleClientID       string // Web OAuth client id (public); same as GOOGLE_CLIENT_ID on API
+	googleMapsBrowserKey string // Maps JavaScript + Places (browser key; HTTP referrer–restricted in GCP)
 }
 
 func NewAuthHandler(
@@ -43,7 +43,7 @@ func (h *AuthHandler) GetClientAuthConfig(c *gin.Context) {
 
 type RegisterRequest struct {
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
+	Password string `json:"password" binding:"required,min=10"`
 	Name     string `json:"name" binding:"required"`
 }
 
@@ -53,6 +53,7 @@ type LoginRequest struct {
 }
 
 func (h *AuthHandler) setAuthCookie(c *gin.Context, token string) {
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		"auth_token",
 		token,
@@ -83,17 +84,16 @@ func (h *AuthHandler) SendRegistrationOTP(c *gin.Context) {
 // CompleteRegistrationOTP verifies the OTP and creates the account.
 func (h *AuthHandler) CompleteRegistrationOTP(c *gin.Context) {
 	var req struct {
-		Phone    string `json:"phone" binding:"required"`
-		Code     string `json:"code" binding:"required,len=6"`
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=6"`
-		Name     string `json:"name" binding:"required"`
+		Phone string `json:"phone" binding:"required"`
+		Code  string `json:"code" binding:"required,len=6"`
+		Email string `json:"email" binding:"required,email"`
+		Name  string `json:"name" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	user, token, err := h.authService.RegisterWithPhoneOTP(c.Request.Context(), req.Phone, req.Code, req.Email, req.Password, req.Name)
+	user, token, err := h.authService.RegisterWithPhoneOTP(c.Request.Context(), req.Phone, req.Code, req.Email, req.Name)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -219,14 +219,33 @@ func (h *AuthHandler) GoogleSignIn(c *gin.Context) {
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
+	// Revoke all currently issued JWTs for this account. Logout still succeeds
+	// when the token is absent/expired so the browser can always clear its cookie.
+	var tokenString string
+	if cookieToken, err := c.Cookie("auth_token"); err == nil {
+		tokenString = cookieToken
+	} else if authHeader := c.GetHeader("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		tokenString = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	}
+	if claims, err := h.authService.ValidateToken(tokenString); err == nil {
+		if id, parseErr := primitive.ObjectIDFromHex(claims.UserID); parseErr == nil {
+			if user, loadErr := h.userRepo.GetByID(c.Request.Context(), id); loadErr == nil && user != nil {
+				user.SessionVersion++
+				user.UpdatedAt = time.Now()
+				_ = h.userRepo.Update(c.Request.Context(), user.ID, user)
+			}
+		}
+	}
 	// Clear the auth cookie
+	secure := c.GetHeader("X-Forwarded-Proto") == "https" || c.Request.TLS != nil
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		"auth_token", // name
-		"",          // value (empty to delete)
-		-1,          // maxAge: -1 to delete immediately
+		"",           // value (empty to delete)
+		-1,           // maxAge: -1 to delete immediately
 		"/",          // path
 		"",           // domain
-		false,        // secure
+		secure,       // secure must match the cookie being removed
 		true,         // httpOnly
 	)
 
@@ -314,7 +333,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	var req struct {
 		Token       string `json:"token" binding:"required"`
-		NewPassword string `json:"new_password" binding:"required,min=6"`
+		NewPassword string `json:"new_password" binding:"required,min=10"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -428,7 +447,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	}
 	var req struct {
 		CurrentPassword string `json:"current_password" binding:"required"`
-		NewPassword     string `json:"new_password" binding:"required,min=6"`
+		NewPassword     string `json:"new_password" binding:"required,min=10"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

@@ -74,6 +74,7 @@ func main() {
 
 	// Update middleware to use config
 	middleware.SetJWTSecret(cfg.JWTSecret)
+	middleware.SetAuthUserRepository(userRepo)
 	middleware.ConfigureRateLimit(cfg.APIRateLimitRPM)
 	middleware.ConfigureErrorResponses(cfg.Env == "production")
 	middleware.SetVendorRepoForStatusCheck(vendorRepo) // block suspended vendors
@@ -198,7 +199,7 @@ func main() {
 	router.Use(middleware.Logger())
 	router.Use(middleware.ErrorHandler())
 	router.Use(middleware.Timeout(30 * time.Second)) // 30 second timeout
-	
+
 	// Only enable rate limiting in production
 	if cfg.Env == "production" {
 		router.Use(middleware.RateLimit()) // Rate limiting
@@ -226,24 +227,23 @@ func main() {
 		auth := api.Group("/auth")
 		{
 			auth.GET("/client-config", authHandler.GetClientAuthConfig)
-			auth.POST("/register", authHandler.Register)
-			auth.POST("/register-otp/send", authHandler.SendRegistrationOTP)
-			auth.POST("/register-otp/complete", authHandler.CompleteRegistrationOTP)
-			auth.POST("/login-otp/send", authHandler.SendLoginOTP)
-			auth.POST("/login-otp/complete", authHandler.CompleteLoginOTP)
-			auth.POST("/login", authHandler.Login)
-			auth.POST("/google", authHandler.GoogleSignIn)
+			auth.POST("/register-otp/send", middleware.AuthRateLimit(), authHandler.SendRegistrationOTP)
+			auth.POST("/register-otp/complete", middleware.AuthRateLimit(), authHandler.CompleteRegistrationOTP)
+			auth.POST("/login-otp/send", middleware.AuthRateLimit(), authHandler.SendLoginOTP)
+			auth.POST("/login-otp/complete", middleware.AuthRateLimit(), authHandler.CompleteLoginOTP)
+			auth.POST("/login", middleware.AuthRateLimit(), authHandler.Login)
+			auth.POST("/google", middleware.AuthRateLimit(), authHandler.GoogleSignIn)
 			// No AuthRequired: allow clearing cookie when JWT is missing/expired
 			auth.POST("/logout", authHandler.Logout)
 			auth.GET("/me", middleware.AuthRequired(), authHandler.GetMe)
 			auth.DELETE("/me", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.DeleteAccount)
-			auth.POST("/refresh", authHandler.Refresh)
-			auth.POST("/forgot-password", authHandler.ForgotPassword)
-			auth.POST("/reset-password", authHandler.ResetPassword)
+			auth.POST("/refresh", middleware.AuthRateLimit(), authHandler.Refresh)
+			auth.POST("/forgot-password", middleware.AuthRateLimit(), authHandler.ForgotPassword)
+			auth.POST("/reset-password", middleware.AuthRateLimit(), authHandler.ResetPassword)
 			auth.POST("/verify-email", authHandler.VerifyEmail)
 			auth.POST("/resend-verification", authHandler.ResendVerification)
 			auth.PUT("/profile", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.UpdateProfile)
-		auth.POST("/avatar", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), uploadHandler.Upload)
+			auth.POST("/avatar", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), uploadHandler.Upload)
 			auth.PUT("/password", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.ChangePassword)
 			auth.POST("/deactivate", middleware.AuthRequired(), middleware.LoadUserMiddleware(userRepo), authHandler.DeactivateAccount)
 		}
@@ -501,6 +501,7 @@ func main() {
 
 			// Customers
 			admin.GET("/customers", middleware.RequireRole("admin"), adminHandler.ListCustomers)
+			admin.POST("/users", middleware.RequireRole("admin"), adminHandler.CreateUser)
 			admin.GET("/customers/:id", middleware.RequireRole("admin"), adminHandler.GetCustomer)
 			admin.PUT("/customers/:id", middleware.RequireRole("admin"), adminHandler.UpdateCustomer)
 

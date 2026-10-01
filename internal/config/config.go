@@ -151,7 +151,7 @@ func Load() (*Config, error) {
 		StorageBucket:       getEnv("STORAGE_BUCKET", "rloco-uploads"),
 		StoragePublicURL:    getEnv("STORAGE_PUBLIC_URL", ""),
 		ResendAPIKey:        getEnv("RESEND_API_KEY", ""),
-		SMTPFrom:            firstNonEmptyEnvWithDefault("noreply@rloco.com", "SMTP_FROM", "SMTP_FROM_EMAIL", "EMAIL_FROM"),
+		SMTPFrom:            firstNonEmptyEnvWithDefault("noreply@rloko.com", "SMTP_FROM", "SMTP_FROM_EMAIL", "EMAIL_FROM"),
 		SMTPFromName:        firstNonEmptyEnvWithDefault("Rloko", "SMTP_FROM_NAME", "EMAIL_FROM_NAME"),
 		AppBaseURL:          getEnv("APP_BASE_URL", "https://dev.rloko.com"), // rloko.com is parked; dev.rloko.com is the live host
 		AdminEmail:          getEnv("ADMIN_EMAIL", ""),

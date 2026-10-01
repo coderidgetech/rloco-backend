@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ type AuthService interface {
 	// SendRegistrationOTP sends an OTP via Twilio Verify (SMS).
 	SendRegistrationOTP(ctx context.Context, phoneRaw string) error
 	// RegisterWithPhoneOTP verifies the OTP and creates the user (phone must match the sent OTP).
-	RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, password, name string) (*models.User, string, error)
+	RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, name string) (*models.User, string, error)
 	SendLoginOTP(ctx context.Context, phoneRaw string) error
 	LoginWithPhoneOTP(ctx context.Context, phoneRaw, otpCode string) (*models.User, string, error)
 	// RefreshSession issues a new JWT when the current one is valid or recently expired (signature must verify).
@@ -61,9 +62,10 @@ type authService struct {
 }
 
 type Claims struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID         string `json:"user_id"`
+	Email          string `json:"email"`
+	Role           string `json:"role"`
+	SessionVersion int64  `json:"session_version"`
 	jwt.RegisteredClaims
 }
 
@@ -162,8 +164,17 @@ func (s *authService) Login(ctx context.Context, email, password string) (*model
 }
 
 func (s *authService) GoogleSignIn(ctx context.Context, idToken string) (*models.User, string, error) {
-	// Verify the ID token with Google's tokeninfo endpoint
-	resp, err := http.Get(fmt.Sprintf("https://oauth2.googleapis.com/tokeninfo?id_token=%s", idToken))
+	if strings.TrimSpace(s.googleClientID) == "" {
+		return nil, "", errors.New("Google sign-in is not configured")
+	}
+	// Verify the ID token with Google's tokeninfo endpoint using the request
+	// context and a bounded client so a remote outage cannot hang authentication.
+	verifyURL := "https://oauth2.googleapis.com/tokeninfo?id_token=" + url.QueryEscape(idToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, verifyURL, nil)
+	if err != nil {
+		return nil, "", errors.New("failed to verify Google token")
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return nil, "", errors.New("failed to verify Google token")
 	}
@@ -184,11 +195,14 @@ func (s *authService) GoogleSignIn(ctx context.Context, idToken string) (*models
 		return nil, "", errors.New("failed to parse Google token")
 	}
 
-	if s.googleClientID != "" && tokenInfo.Aud != s.googleClientID {
+	if tokenInfo.Aud != s.googleClientID {
 		return nil, "", errors.New("Google token audience mismatch")
 	}
 	if tokenInfo.Email == "" {
 		return nil, "", errors.New("Google token missing email")
+	}
+	if !strings.EqualFold(tokenInfo.EmailVerified, "true") {
+		return nil, "", errors.New("Google account email is not verified")
 	}
 
 	// Find existing user or create new one
@@ -223,9 +237,10 @@ func (s *authService) GoogleSignIn(ctx context.Context, idToken string) (*models
 
 func (s *authService) GenerateToken(user *models.User) (string, error) {
 	claims := &Claims{
-		UserID: user.ID.Hex(),
-		Email:  user.Email,
-		Role:   user.Role,
+		UserID:         user.ID.Hex(),
+		Email:          user.Email,
+		Role:           user.Role,
+		SessionVersion: user.SessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -304,6 +319,9 @@ func (s *authService) RefreshSession(ctx context.Context, tokenString string) (*
 	if !user.Active {
 		return nil, "", errors.New("account is deactivated")
 	}
+	if user.SessionVersion != c.SessionVersion {
+		return nil, "", errors.New("session has been revoked")
+	}
 	newToken, err := s.GenerateToken(user)
 	if err != nil {
 		return nil, "", err
@@ -372,6 +390,7 @@ func (s *authService) ResetPassword(ctx context.Context, token, newPassword stri
 	}
 
 	user.PasswordHash = string(hashedPassword)
+	user.SessionVersion++
 	user.UpdatedAt = time.Now()
 	if err := s.userRepo.Update(ctx, user.ID, user); err != nil {
 		return err
@@ -531,6 +550,7 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentPasswor
 		return err
 	}
 	user.PasswordHash = string(hashed)
+	user.SessionVersion++
 	user.MustResetPassword = false // a chosen password clears the forced-reset gate
 	user.UpdatedAt = time.Now()
 	return s.userRepo.Update(ctx, user.ID, user)
@@ -609,7 +629,7 @@ func (s *authService) SendRegistrationOTP(ctx context.Context, phoneRaw string) 
 	return s.otpRepo.Upsert(ctx, phoneKey, repositories.PhoneOTPPurposeRegistration, verificationSid, expires, now)
 }
 
-func (s *authService) RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, password, name string) (*models.User, string, error) {
+func (s *authService) RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCode, email, name string) (*models.User, string, error) {
 	phoneKey, err := NormalizePhoneKey(phoneRaw)
 	if err != nil {
 		return nil, "", err
@@ -650,14 +670,10 @@ func (s *authService) RegisterWithPhoneOTP(ctx context.Context, phoneRaw, otpCod
 		return nil, "", errors.New("user already exists")
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, "", err
-	}
 	phoneStr := toE164
 	user := &models.User{
 		Email:         email,
-		PasswordHash:  string(hashedPassword),
+		PasswordHash:  "",
 		Name:          name,
 		Role:          "customer",
 		Active:        true,

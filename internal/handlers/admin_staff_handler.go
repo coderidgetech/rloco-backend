@@ -5,12 +5,56 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"rloco-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// CreateUser creates a customer or administrator without replacing the
+// currently authenticated administrator's session.
+func (h *AdminHandler) CreateUser(c *gin.Context) {
+	var req struct {
+		Name     string `json:"name" binding:"required"`
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required,min=10"`
+		Role     string `json:"role" binding:"required,oneof=customer admin"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if existing, _ := h.userRepo.GetByEmail(c.Request.Context(), email); existing != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "a user with this email already exists"})
+		return
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		return
+	}
+	now := time.Now()
+	user := &models.User{
+		Email:             email,
+		PasswordHash:      string(hashed),
+		Name:              strings.TrimSpace(req.Name),
+		Role:              req.Role,
+		Active:            true,
+		EmailVerified:     true,
+		MustResetPassword: true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := h.userRepo.Create(c.Request.Context(), user); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"user": user})
+}
 
 const staffPasswordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 

@@ -6,13 +6,24 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"rloco-backend/internal/repositories"
 )
 
 type Claims struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID         string `json:"user_id"`
+	Email          string `json:"email"`
+	Role           string `json:"role"`
+	SessionVersion int64  `json:"session_version"`
 	jwt.RegisteredClaims
+}
+
+var authUserRepo repositories.UserRepository
+
+// SetAuthUserRepository enables live account-status and role checks on every
+// authenticated request, so deactivation and role changes take effect immediately.
+func SetAuthUserRepository(repo repositories.UserRepository) {
+	authUserRepo = repo
 }
 
 func AuthRequired() gin.HandlerFunc {
@@ -45,7 +56,7 @@ func AuthRequired() gin.HandlerFunc {
 
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 			return []byte(secret), nil
-		})
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 		if err != nil || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
@@ -63,6 +74,24 @@ func AuthRequired() gin.HandlerFunc {
 		c.Set("user_id", claims.UserID)
 		c.Set("email", claims.Email)
 		c.Set("role", claims.Role)
+
+		if authUserRepo != nil {
+			id, parseErr := primitive.ObjectIDFromHex(claims.UserID)
+			if parseErr != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user session"})
+				c.Abort()
+				return
+			}
+			user, loadErr := authUserRepo.GetByID(c.Request.Context(), id)
+			if loadErr != nil || user == nil || !user.Active || user.SessionVersion != claims.SessionVersion {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Account is unavailable"})
+				c.Abort()
+				return
+			}
+			c.Set("email", user.Email)
+			c.Set("role", user.Role)
+			c.Set("user_obj", user)
+		}
 		c.Next()
 	}
 }
@@ -114,5 +143,3 @@ func getJWTSecret() string {
 	}
 	return jwtSecret
 }
-
-
